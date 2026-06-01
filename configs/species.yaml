@@ -1,0 +1,38 @@
+# Species and life-stage class definitions for HerringNet.
+# These map class indices from the classifier to species metadata.
+# Update this file when adding new species to the classifier.
+
+classes:
+  0:
+    name: "river_herring"
+    scientific_name: "Alosa pseudoharengus / Alosa aestivalis"
+    includes:
+      - "alewife"
+      - "blueback_herring"
+    color: [0, 255, 0]  # Green (BGR)
+    notes: "Primary target species. Includes both alewife and blueback herring."
+
+  1:
+    name: "bass"
+    scientific_name: "Micropterus spp."
+    color: [255, 0, 0]  # Blue (BGR)
+
+  2:
+    name: "perch"
+    scientific_name: "Perca flavescens"
+    color: [0, 165, 255]  # Orange (BGR)
+
+  3:
+    name: "trout"
+    scientific_name: "Salmo / Oncorhynchus spp."
+    color: [255, 255, 0]  # Cyan (BGR)
+
+  4:
+    name: "unknown_fish"
+    color: [128, 128, 128]  # Gray (BGR)
+    notes: "Catch-all for unidentifiable detections."
+
+# Life-stage definitions (for future classifier expansion)
+life_stages:
+  - "juvenile"
+  - "adult"

@@ -1,0 +1,37 @@
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Packaging / build artifacts
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Secrets (keep .env.example, ignore real .env)
+.env
+
+# Model weights (large binaries; GitHub rejects files >100MB)
+*.pt
+*.pth
+*.onnx
+
+# Large image / data assets
+data/raw/
+data/frames/
+outputs/
+runs/
+
+# Local tool settings
+.claude/settings.local.json
+
+# OS cruft
+.DS_Store
+Thumbs.db

@@ -1,0 +1,49 @@
+# HerringNet default configuration
+# Site-specific overrides go in configs/sites/<site_name>.yaml
+
+detector:
+  # Path to detection model weights. Use "cfd" to auto-download
+  # the Community Fish Detector, or a path to custom weights.
+  # Options: "cfd" for Community Fish Detector, "yolov8n" (nano, fastest),
+  # "yolov8s" (small, better accuracy), or a path to custom weights.
+  model_name: "models/cfd-yolov12x.pt"
+  confidence_threshold: 0.25
+  iou_threshold: 0.45
+  image_size: 1024
+  device: "cpu"
+  # SAHI sliced inference for small fish. Tiles the image into overlapping
+  # slices so small/juvenile fish are seen at higher effective resolution.
+  use_sahi: true
+  sahi_slice_size: 512
+  sahi_overlap_ratio: 0.3
+
+classifier:
+  # Path to species classifier weights. Set to null to disable
+  # classification (detection-only mode).
+  model_path: null
+  confidence_threshold: 0.5
+  image_size: 224
+
+frame_extraction:
+  # Frame extraction interval for video processing.
+  # Based on Marjadi et al. (2024) FRR methodology.
+  frame_interval: 5
+  mean_frr: 4.55
+
+active_learning:
+  enabled: true
+  # Flag detections with confidence below this threshold.
+  uncertainty_threshold: 0.6
+  # Also flag when top-2 class probabilities are within this margin.
+  margin_threshold: 0.15
+  max_review_queue: 500
+  review_output_dir: "data/review_queue"
+
+output:
+  output_dir: "outputs"
+  save_json: true
+  save_images: false
+  save_crops: false
+  save_csv: false
+
+site_name: "default"

@@ -1,0 +1,12 @@
+# Site-specific configuration for Monument River, Bourne, MA.
+# Values here override configs/default.yaml.
+# Based on Marjadi et al. (2024) study parameters.
+
+site_name: "monument_river"
+
+detector:
+  confidence_threshold: 0.20
+
+frame_extraction:
+  frame_interval: 5
+  mean_frr: 4.55
