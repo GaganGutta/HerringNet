@@ -26,6 +26,8 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "tqdm>=4.65.0",
     "rich>=13.0.0",
+    "openpyxl>=3.1",
+    "pillow>=10.0",
 ]
 
 [project.optional-dependencies]
@@ -34,6 +36,9 @@ dev = [
     "pytest-cov>=4.0",
     "ruff>=0.1.0",
     "mypy>=1.0",
+]
+label = [
+    "fiftyone>=0.23",
 ]
 
 [project.scripts]

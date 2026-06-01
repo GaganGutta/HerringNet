@@ -45,12 +45,14 @@ def main() -> None:
     from cli.commands.train import add_train_parser
     from cli.commands.setup_data import add_setup_data_parser
     from cli.commands.review import add_review_parser
+    from cli.commands.db import add_db_parser
 
     add_detect_parser(subparsers)
     add_extract_parser(subparsers)
     add_train_parser(subparsers)
     add_setup_data_parser(subparsers)
     add_review_parser(subparsers)
+    add_db_parser(subparsers)
 
     # Demo subcommand (registered inline since it is simple)
     demo_parser = subparsers.add_parser("demo", help="Launch the Gradio demo")

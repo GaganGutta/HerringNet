@@ -29,6 +29,11 @@ data/frames/
 outputs/
 runs/
 
+# Generated databases (regenerate with `herringnet db import-excel` / `scan`)
+*.db
+*.sqlite
+*.sqlite3
+
 # Local tool settings
 .claude/settings.local.json
 
