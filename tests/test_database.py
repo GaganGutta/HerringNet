@@ -159,3 +159,38 @@ class TestScan:
         assert summary["created"] == 1
         assert db.scalar("SELECT COUNT(*) FROM images WHERE file_exists = 1") == 2
         db.close()
+
+
+class TestWatcher:
+    """The folder-drop ingest moves files into the archive and records them."""
+
+    def test_process_folder(self, tmp_path):
+        pytest.importorskip("PIL")
+        from PIL import Image
+
+        from herringnet.database.watch import process_folder
+
+        incoming = tmp_path / "incoming"
+        archive = tmp_path / "archive"
+        dropped = incoming / "BRIDE_week9"
+        dropped.mkdir(parents=True)
+        for name in ("GOPRO100", "GOPRO101", "GOPRO102"):
+            Image.new("RGB", (32, 24), (5, 5, 5)).save(dropped / f"{name}.jpg")
+
+        db = Database(tmp_path / "test.db")
+        db.init_schema()
+        summary = process_folder(db, dropped, archive)
+
+        assert summary["moved"] == 3
+        assert summary["created"] == 3
+        # Files now live under the archive, organized by session.
+        assert (archive / "BRIDE_week9" / "GOPRO100.jpg").exists()
+        # The dropped folder is cleaned up after ingest.
+        assert not dropped.exists()
+        # A session was created from the folder name, with linked images.
+        assert db.scalar("SELECT COUNT(*) FROM sessions WHERE label='BRIDE_week9'") == 1
+        assert db.scalar("SELECT COUNT(*) FROM images WHERE file_exists=1") == 3
+        # Paths are stored relative to the archive root.
+        path = db.scalar("SELECT file_path FROM images LIMIT 1")
+        assert path.startswith("BRIDE_week9/")
+        db.close()

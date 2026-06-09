@@ -1,0 +1,16 @@
+# Lightweight deps for the hosted services (watcher, upload page, Datasette).
+# Deliberately excludes the heavy ML stack (torch, ultralytics, opencv) so the
+# server image stays small. Detection/training are run elsewhere, not here.
+pandas>=2.0
+openpyxl>=3.1
+pillow>=10.0
+pyyaml>=6.0
+pydantic>=2.0
+rich>=13.0
+tqdm>=4.65
+requests>=2.31
+datasette>=0.64
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-multipart>=0.0.9
+label-studio-sdk>=1.0

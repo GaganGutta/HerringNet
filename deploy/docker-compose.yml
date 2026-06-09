@@ -1,0 +1,127 @@
+# HerringNet hosted stack.
+#
+# One small VM runs everything, fronted by Caddy (automatic HTTPS + a single
+# shared password). Routes:
+#   https://DOMAIN/         -> Datasette  (browse / query the database, read-only)
+#   https://DOMAIN/label/   -> Label Studio (team image labeling)
+#   https://DOMAIN/upload/  -> Upload page (drop a folder of images)
+#
+# Images and the database live under ./data on the host, which on the VM you
+# point at your mounted storage volume. See deploy/README.md for the runbook.
+
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+      BASIC_AUTH_USER: ${BASIC_AUTH_USER}
+      BASIC_AUTH_HASH: ${BASIC_AUTH_HASH}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - datasette
+      - label-studio
+      - upload
+
+  # Read-only, browsable, SQL-queryable view of the database.
+  datasette:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    command: >
+      datasette serve /data/herringnet.db
+      --host 0.0.0.0 --port 8001
+      --setting base_url /db/
+      --setting sql_time_limit_ms 5000
+      --setting allow_download off
+    volumes:
+      - ${DATA_DIR:-./data}:/data
+    expose:
+      - "8001"
+
+  # Watches the drop folder and ingests new image folders into the database.
+  watcher:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    command: >
+      python -m cli.main db watch /data/incoming
+      --archive /data/archive --db /data/herringnet.db --interval 15
+    environment:
+      # Set LS_PROJECT_ID in .env after creating the Label Studio project so
+      # freshly uploaded images are auto-pushed as tasks. Empty = skip LS.
+      LS_URL: http://label-studio:8080
+      LS_TOKEN: ${LS_TOKEN}
+      LS_PROJECT_ID: ${LS_PROJECT_ID:-}
+    volumes:
+      - ${DATA_DIR:-./data}:/data
+    depends_on:
+      - label-studio
+
+  # Simple web page for dropping a folder of images (the smooth upload path).
+  upload:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    command: >
+      uvicorn herringnet.database.upload_server:app
+      --host 0.0.0.0 --port 8002
+    environment:
+      HN_INCOMING_DIR: /data/incoming
+    volumes:
+      - ${DATA_DIR:-./data}:/data
+    expose:
+      - "8002"
+
+  # Team labeling UI.
+  label-studio:
+    image: heartexlabs/label-studio:1.13.1
+    restart: unless-stopped
+    environment:
+      LABEL_STUDIO_HOST: https://${DOMAIN}/label
+      LABEL_STUDIO_PORT: "8080"
+      # Pre-create one shared account so the team does not each need to sign up.
+      LABEL_STUDIO_USERNAME: ${LS_USERNAME}
+      LABEL_STUDIO_PASSWORD: ${LS_PASSWORD}
+      LABEL_STUDIO_USER_TOKEN: ${LS_TOKEN}
+      DJANGO_DB: default
+      POSTGRE_NAME: labelstudio
+      POSTGRE_USER: labelstudio
+      POSTGRE_PASSWORD: ${LS_DB_PASSWORD}
+      POSTGRE_HOST: ls-db
+      POSTGRE_PORT: "5432"
+      # Serve the image archive to Label Studio from local disk.
+      LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED: "true"
+      LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT: /label-studio/files
+    volumes:
+      - ls_data:/label-studio/data
+      - ${DATA_DIR:-./data}/archive:/label-studio/files:ro
+    depends_on:
+      - ls-db
+    expose:
+      - "8080"
+
+  ls-db:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: labelstudio
+      POSTGRES_USER: labelstudio
+      POSTGRES_PASSWORD: ${LS_DB_PASSWORD}
+    volumes:
+      - ls_pgdata:/var/lib/postgresql/data
+
+volumes:
+  caddy_data:
+  caddy_config:
+  ls_data:
+  ls_pgdata:
