@@ -70,8 +70,10 @@ Rough total: $9-12/month.
 From `deploy/`:
 ```bash
 # put the workbook somewhere on the VM, then:
-docker compose run --rm watcher python -m cli.main db import-excel /data/Workbook.xlsx
-docker compose run --rm watcher python -m cli.main db scan /data/archive
+docker compose run --rm watcher \
+  python -m cli.main db --db /data/herringnet.db import-excel /data/Workbook.xlsx
+docker compose run --rm watcher \
+  python -m cli.main db --db /data/herringnet.db scan /data/archive
 ```
 
 ## Day-to-day use
@@ -81,7 +83,8 @@ docker compose run --rm watcher python -m cli.main db scan /data/archive
 - **Label:** `https://DOMAIN/label/`.
 - **Pull finished labels into the database:**
   ```bash
-  docker compose run --rm watcher python -m cli.main db ls-pull
+  docker compose run --rm watcher \
+    python -m cli.main db --db /data/herringnet.db ls-pull
   ```
 
 ## Backups

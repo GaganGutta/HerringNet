@@ -53,8 +53,8 @@ services:
       dockerfile: deploy/Dockerfile
     restart: unless-stopped
     command: >
-      python -m cli.main db watch /data/incoming
-      --archive /data/archive --db /data/herringnet.db --interval 15
+      python -m cli.main db --db /data/herringnet.db
+      watch /data/incoming --archive /data/archive --interval 15
     environment:
       # Set LS_PROJECT_ID in .env after creating the Label Studio project so
       # freshly uploaded images are auto-pushed as tasks. Empty = skip LS.
