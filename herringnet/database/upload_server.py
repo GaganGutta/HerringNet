@@ -71,7 +71,7 @@ go.addEventListener('click',async()=>{
         const r=await fetch('upload',{method:'POST',body:fd});
         if(r.ok) done++; else failed++;
       }catch(e){failed++;}
-      status.textContent='Uploaded '+done+' / '+total+(failed?' ('+failed+' failed)':'');
+      status.textContent='Uploaded '+done+'/'+total+(failed?' ('+failed+' failed)':'');
     }
   }
   status.textContent='Uploading '+total+' files...';
