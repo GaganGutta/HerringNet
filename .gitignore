@@ -26,8 +26,13 @@ env/
 # Large image / data assets
 data/raw/
 data/frames/
+data/archive/
+data/incoming/
 outputs/
 runs/
+
+# Deployment secrets and local data
+deploy/.env
 
 # Generated databases (regenerate with `herringnet db import-excel` / `scan`)
 *.db

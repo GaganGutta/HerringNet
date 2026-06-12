@@ -66,6 +66,27 @@ def add_db_parser(subparsers: argparse._SubParsersAction) -> None:
     p_yolo.add_argument("--field", type=str, default="model",
                         help="Detections field to export")
 
+    p_watch = actions.add_parser("watch", help="Watch a drop folder and ingest")
+    p_watch.add_argument("incoming", type=str, help="Drop folder to watch")
+    p_watch.add_argument("--archive", type=str, default="data/archive",
+                         help="Image archive root to move folders into")
+    p_watch.add_argument("--interval", type=float, default=15.0,
+                         help="Seconds between polls")
+    p_watch.add_argument("--no-label-studio", action="store_true",
+                         help="Do not push ingested images to Label Studio")
+
+    actions.add_parser("ls-push", help="Push new images to Label Studio as tasks")
+    actions.add_parser("ls-pull", help="Pull Label Studio annotations into the DB")
+
+    p_del = actions.add_parser(
+        "delete-session", help="Delete a session's records and archived files"
+    )
+    p_del.add_argument("label", type=str, help="Session label (folder name)")
+    p_del.add_argument("--archive", type=str, default="data/archive",
+                       help="Image archive root holding the session folder")
+    p_del.add_argument("--keep-files", action="store_true",
+                       help="Delete database records but keep image files")
+
     parser.set_defaults(func=run_db)
 
 
@@ -75,7 +96,8 @@ def run_db(args: argparse.Namespace) -> None:
 
     if args.db_action is None:
         console.print("[yellow]Specify an action: init, import-excel, scan, "
-                      "ingest-predictions, stats, review, sync, export-yolo[/yellow]")
+                      "ingest-predictions, stats, review, sync, export-yolo, "
+                      "watch, ls-push, ls-pull[/yellow]")
         return
 
     db = Database(args.db_path)
@@ -128,6 +150,45 @@ def run_db(args: argparse.Namespace) -> None:
         from herringnet.database.fiftyone_io import export_yolo
         out = export_yolo(args.name, args.export_dir, label_field=args.field)
         console.print(f"[green]Exported[/green] to {out}")
+
+    elif args.db_action == "watch":
+        from herringnet.database.watch import watch_incoming
+        ls = None
+        if not args.no_label_studio:
+            from herringnet.database.label_studio import LabelStudioClient
+            ls = LabelStudioClient.from_env()
+            if ls is None:
+                console.print("[dim]Label Studio not configured (LS_URL/LS_TOKEN/"
+                              "LS_PROJECT_ID); ingesting without it.[/dim]")
+        console.print(f"Watching [bold]{args.incoming}[/bold] (Ctrl-C to stop) ...")
+        watch_incoming(db, args.incoming, args.archive,
+                       interval=args.interval, label_studio=ls)
+
+    elif args.db_action == "ls-push":
+        from herringnet.database.label_studio import LabelStudioClient
+        ls = LabelStudioClient.from_env()
+        if ls is None:
+            console.print("[red]Set LS_URL, LS_TOKEN, LS_PROJECT_ID first.[/red]")
+        else:
+            _print_summary("Label Studio push", ls.push_new_tasks(db))
+
+    elif args.db_action == "ls-pull":
+        from herringnet.database.label_studio import LabelStudioClient
+        ls = LabelStudioClient.from_env()
+        if ls is None:
+            console.print("[red]Set LS_URL, LS_TOKEN, LS_PROJECT_ID first.[/red]")
+        else:
+            _print_summary("Label Studio pull", ls.pull_annotations(db))
+
+    elif args.db_action == "delete-session":
+        from herringnet.database.admin import delete_session
+        summary = delete_session(
+            db, args.label, archive_dir=args.archive, keep_files=args.keep_files
+        )
+        if summary["sessions"] == 0:
+            console.print(f"[yellow]No session named {args.label!r}[/yellow]")
+        else:
+            _print_summary(f"Deleted session {args.label!r}", summary)
 
     db.close()
 

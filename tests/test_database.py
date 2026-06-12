@@ -159,3 +159,76 @@ class TestScan:
         assert summary["created"] == 1
         assert db.scalar("SELECT COUNT(*) FROM images WHERE file_exists = 1") == 2
         db.close()
+
+
+class TestWatcher:
+    """The folder-drop ingest moves files into the archive and records them."""
+
+    def test_process_folder(self, tmp_path):
+        pytest.importorskip("PIL")
+        from PIL import Image
+
+        from herringnet.database.watch import process_folder
+
+        incoming = tmp_path / "incoming"
+        archive = tmp_path / "archive"
+        dropped = incoming / "BRIDE_week9"
+        dropped.mkdir(parents=True)
+        for name in ("GOPRO100", "GOPRO101", "GOPRO102"):
+            Image.new("RGB", (32, 24), (5, 5, 5)).save(dropped / f"{name}.jpg")
+
+        db = Database(tmp_path / "test.db")
+        db.init_schema()
+        summary = process_folder(db, dropped, archive)
+
+        assert summary["moved"] == 3
+        assert summary["created"] == 3
+        # Files now live under the archive, organized by session.
+        assert (archive / "BRIDE_week9" / "GOPRO100.jpg").exists()
+        # The dropped folder is cleaned up after ingest.
+        assert not dropped.exists()
+        # A session was created from the folder name, with linked images.
+        assert db.scalar("SELECT COUNT(*) FROM sessions WHERE label='BRIDE_week9'") == 1
+        assert db.scalar("SELECT COUNT(*) FROM images WHERE file_exists=1") == 3
+        # Paths are stored relative to the archive root.
+        path = db.scalar("SELECT file_path FROM images LIMIT 1")
+        assert path.startswith("BRIDE_week9/")
+        db.close()
+
+
+class TestDeleteSession:
+    """delete_session removes records and archived files for one session only."""
+
+    def test_delete(self, tmp_path):
+        pytest.importorskip("PIL")
+        from PIL import Image
+
+        from herringnet.database.admin import delete_session, list_sessions
+        from herringnet.database.watch import process_folder
+
+        incoming = tmp_path / "incoming"
+        archive = tmp_path / "archive"
+        for name in ("KEEP_week1", "JUNK_week2"):
+            folder = incoming / name
+            folder.mkdir(parents=True)
+            Image.new("RGB", (32, 24), (9, 9, 9)).save(folder / "img1.jpg")
+
+        db = Database(tmp_path / "test.db")
+        db.init_schema()
+        process_folder(db, incoming / "KEEP_week1", archive)
+        process_folder(db, incoming / "JUNK_week2", archive)
+
+        summary = delete_session(db, "JUNK_week2", archive_dir=archive)
+        assert summary["sessions"] == 1
+        assert summary["images"] == 1
+        assert summary["files_removed"] == 1
+        assert not (archive / "JUNK_week2").exists()
+
+        # The other session is untouched, in DB and on disk.
+        labels = [s["label"] for s in list_sessions(db)]
+        assert labels == ["KEEP_week1"]
+        assert (archive / "KEEP_week1" / "img1.jpg").exists()
+
+        # Deleting a nonexistent session is a no-op.
+        assert delete_session(db, "nope", archive_dir=archive)["sessions"] == 0
+        db.close()

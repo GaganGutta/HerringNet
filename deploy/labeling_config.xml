@@ -1,0 +1,18 @@
+<!-- Label Studio labeling interface for HerringNet review.
+     Paste this into the project's Labeling Setup (Code view), or it is set
+     automatically if you create the project via the API. -->
+<View>
+  <Image name="image" value="$image" zoom="true" zoomControl="true"/>
+
+  <Header value="Are river herring present?"/>
+  <Choices name="river_herring" toName="image" choice="single" showInLine="true">
+    <Choice value="Yes"/>
+    <Choice value="No"/>
+    <Choice value="Uncertain"/>
+  </Choices>
+
+  <Header value="Draw a box around each fish (green = model's guess)"/>
+  <RectangleLabels name="box" toName="image">
+    <Label value="fish" background="green"/>
+  </RectangleLabels>
+</View>

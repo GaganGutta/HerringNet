@@ -1,0 +1,37 @@
+# Caddy config for the HerringNet hosted stack.
+#
+# Caddy gets a free HTTPS certificate for your domain automatically.
+# A single shared password protects the data viewer and the upload page.
+# Label Studio is left to its own account login (it requires one), so it is
+# not double-gated.
+
+{$DOMAIN} {
+	encode gzip
+
+	# Shared-password gate for the viewer and uploader only.
+	@gated path /db/* /upload/*
+	basic_auth @gated {
+		{$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
+	}
+
+	# Upload page (folder drop). handle_path strips the /upload prefix.
+	handle_path /upload/* {
+		reverse_proxy upload:8002
+	}
+
+	# Team labeling UI. Prefix is preserved; Label Studio is configured to
+	# run under the /label subpath.
+	handle /label/* {
+		reverse_proxy label-studio:8080
+	}
+
+	# Database viewer (Datasette runs with base_url /db/).
+	handle /db/* {
+		reverse_proxy datasette:8001
+	}
+
+	# Send the root to the data viewer.
+	handle / {
+		redir /db/ 302
+	}
+}

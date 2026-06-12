@@ -102,6 +102,7 @@ def scan_directory(
     session: str | None = None,
     site_id: str | None = None,
     recursive: bool = True,
+    only_under: str | None = None,
 ) -> dict[str, int]:
     """Scan an image archive and attach files to image rows.
 
@@ -113,6 +114,9 @@ def scan_directory(
             file to. If omitted, the file's parent folder name is used.
         site_id: Optional site id for any sessions created during the scan.
         recursive: Whether to descend into subfolders.
+        only_under: Optional subfolder (relative to image_root) to limit the
+            scan to, while still storing paths relative to image_root. Used by
+            the watcher to ingest just a freshly dropped folder incrementally.
 
     Returns:
         Summary dict: files seen, rows updated, rows created, duplicates.
@@ -121,9 +125,10 @@ def scan_directory(
     if not image_root.exists():
         raise FileNotFoundError(f"Image root not found: {image_root}")
 
+    scan_base = image_root / only_under if only_under else image_root
     pattern = "**/*" if recursive else "*"
     files = sorted(
-        p for p in image_root.glob(pattern)
+        p for p in scan_base.glob(pattern)
         if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
     )
 

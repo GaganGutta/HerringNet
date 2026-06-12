@@ -40,6 +40,14 @@ dev = [
 label = [
     "fiftyone>=0.23",
 ]
+serve = [
+    "datasette>=0.64",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "python-multipart>=0.0.9",
+    "requests>=2.31",
+    "label-studio-sdk>=1.0",
+]
 
 [project.scripts]
 herringnet = "cli.main:main"
