@@ -53,17 +53,31 @@ folder.addEventListener('change',()=>{
 });
 go.addEventListener('click',async()=>{
   if(!folder.files.length){status.textContent='Pick a folder first.';return;}
-  const fd=new FormData();
-  fd.append('session', session.value||'');
-  for(const f of folder.files) fd.append('files', f, f.name);
-  go.disabled=true; status.textContent='Uploading '+folder.files.length+' files...';
-  try{
-    const r=await fetch('upload',{method:'POST',body:fd});
-    const j=await r.json();
-    status.textContent = r.ok
-      ? 'Done. Saved '+j.saved+' images to "'+j.session+'". Ingest runs shortly.'
-      : 'Error: '+(j.detail||r.status);
-  }catch(e){status.textContent='Error: '+e;}
+  const files=[...folder.files], total=files.length, sess=session.value||'';
+  let done=0, failed=0;
+  go.disabled=true;
+  // Parallel workers: several concurrent streams use a slow uplink far
+  // better than one big sequential request, and one failed file no
+  // longer kills the whole batch.
+  const WORKERS=4;
+  const queue=files.slice();
+  async function worker(){
+    while(queue.length){
+      const f=queue.shift();
+      const fd=new FormData();
+      fd.append('session', sess);
+      fd.append('files', f, f.name);
+      try{
+        const r=await fetch('upload',{method:'POST',body:fd});
+        if(r.ok) done++; else failed++;
+      }catch(e){failed++;}
+      status.textContent='Uploaded '+done+' / '+total+(failed?' ('+failed+' failed)':'');
+    }
+  }
+  status.textContent='Uploading '+total+' files...';
+  await Promise.all(Array.from({length:WORKERS},worker));
+  status.textContent='Done: '+done+' / '+total+' uploaded'+
+    (failed?', '+failed+' FAILED (re-run to retry)':'')+'. Ingest runs shortly.';
   go.disabled=false;
 });
 </script></body></html>"""
