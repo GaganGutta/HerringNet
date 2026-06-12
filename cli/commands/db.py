@@ -78,6 +78,15 @@ def add_db_parser(subparsers: argparse._SubParsersAction) -> None:
     actions.add_parser("ls-push", help="Push new images to Label Studio as tasks")
     actions.add_parser("ls-pull", help="Pull Label Studio annotations into the DB")
 
+    p_del = actions.add_parser(
+        "delete-session", help="Delete a session's records and archived files"
+    )
+    p_del.add_argument("label", type=str, help="Session label (folder name)")
+    p_del.add_argument("--archive", type=str, default="data/archive",
+                       help="Image archive root holding the session folder")
+    p_del.add_argument("--keep-files", action="store_true",
+                       help="Delete database records but keep image files")
+
     parser.set_defaults(func=run_db)
 
 
@@ -170,6 +179,16 @@ def run_db(args: argparse.Namespace) -> None:
             console.print("[red]Set LS_URL, LS_TOKEN, LS_PROJECT_ID first.[/red]")
         else:
             _print_summary("Label Studio pull", ls.pull_annotations(db))
+
+    elif args.db_action == "delete-session":
+        from herringnet.database.admin import delete_session
+        summary = delete_session(
+            db, args.label, archive_dir=args.archive, keep_files=args.keep_files
+        )
+        if summary["sessions"] == 0:
+            console.print(f"[yellow]No session named {args.label!r}[/yellow]")
+        else:
+            _print_summary(f"Deleted session {args.label!r}", summary)
 
     db.close()
 

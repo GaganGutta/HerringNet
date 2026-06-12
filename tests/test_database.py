@@ -194,3 +194,41 @@ class TestWatcher:
         path = db.scalar("SELECT file_path FROM images LIMIT 1")
         assert path.startswith("BRIDE_week9/")
         db.close()
+
+
+class TestDeleteSession:
+    """delete_session removes records and archived files for one session only."""
+
+    def test_delete(self, tmp_path):
+        pytest.importorskip("PIL")
+        from PIL import Image
+
+        from herringnet.database.admin import delete_session, list_sessions
+        from herringnet.database.watch import process_folder
+
+        incoming = tmp_path / "incoming"
+        archive = tmp_path / "archive"
+        for name in ("KEEP_week1", "JUNK_week2"):
+            folder = incoming / name
+            folder.mkdir(parents=True)
+            Image.new("RGB", (32, 24), (9, 9, 9)).save(folder / "img1.jpg")
+
+        db = Database(tmp_path / "test.db")
+        db.init_schema()
+        process_folder(db, incoming / "KEEP_week1", archive)
+        process_folder(db, incoming / "JUNK_week2", archive)
+
+        summary = delete_session(db, "JUNK_week2", archive_dir=archive)
+        assert summary["sessions"] == 1
+        assert summary["images"] == 1
+        assert summary["files_removed"] == 1
+        assert not (archive / "JUNK_week2").exists()
+
+        # The other session is untouched, in DB and on disk.
+        labels = [s["label"] for s in list_sessions(db)]
+        assert labels == ["KEEP_week1"]
+        assert (archive / "KEEP_week1" / "img1.jpg").exists()
+
+        # Deleting a nonexistent session is a no-op.
+        assert delete_session(db, "nope", archive_dir=archive)["sessions"] == 0
+        db.close()

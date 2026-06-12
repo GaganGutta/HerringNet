@@ -21,6 +21,8 @@ from fastapi import FastAPI, Form, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 
 INCOMING_DIR = Path(os.environ.get("HN_INCOMING_DIR", "data/incoming"))
+DB_PATH = os.environ.get("HN_DB", "data/herringnet.db")
+ARCHIVE_DIR = os.environ.get("HN_ARCHIVE", "data/archive")
 
 app = FastAPI(title="HerringNet Upload")
 
@@ -42,6 +44,12 @@ the database automatically within a minute.</p>
 <input id="folder" type="file" webkitdirectory directory multiple>
 <button id="go">Upload</button>
 <div id="status"></div>
+
+<h1 style="margin-top:2.5rem">Manage sessions</h1>
+<p>Each row is one uploaded folder (session). Deleting removes its images
+and database records permanently.</p>
+<table id="sessions" style="width:100%;border-collapse:collapse"></table>
+
 <script>
 const $=id=>document.getElementById(id);
 const folder=$('folder'), session=$('session'), status=$('status'), go=$('go');
@@ -79,7 +87,37 @@ go.addEventListener('click',async()=>{
   status.textContent='Done: '+done+' / '+total+' uploaded'+
     (failed?', '+failed+' FAILED (re-run to retry)':'')+'. Ingest runs shortly.';
   go.disabled=false;
+  loadSessions();
 });
+
+async function loadSessions(){
+  const tbl=$('sessions');
+  try{
+    const rows=await (await fetch('sessions')).json();
+    tbl.innerHTML='<tr><th align="left">Session</th><th>Images</th>'+
+      '<th>With files</th><th></th></tr>'+
+      rows.map(r=>'<tr><td>'+r.label+'</td><td align="center">'+r.images+
+        '</td><td align="center">'+(r.with_files||0)+
+        '</td><td><button onclick="delSession(\\''+r.label.replace(/'/g,"\\\\'")+
+        '\\')">Delete</button></td></tr>').join('');
+  }catch(e){tbl.innerHTML='<tr><td>Could not load sessions: '+e+'</td></tr>';}
+}
+
+async function delSession(label){
+  const typed=prompt('This permanently deletes ALL images and records of "'+
+    label+'".\\n\\nType the session name to confirm:');
+  if(typed!==label){
+    if(typed!==null)alert('Name did not match; nothing deleted.');
+    return;
+  }
+  const fd=new FormData(); fd.append('label', label);
+  const r=await fetch('delete-session',{method:'POST',body:fd});
+  const j=await r.json();
+  alert(r.ok?('Deleted: '+j.images+' images, '+j.files_removed+' files.')
+            :('Error: '+(j.detail||r.status)));
+  loadSessions();
+}
+loadSessions();
 </script></body></html>"""
 
 
@@ -92,6 +130,30 @@ def _slug(name: str, fallback: str = "upload") -> str:
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     return _PAGE
+
+
+@app.get("/sessions")
+def sessions() -> JSONResponse:
+    from herringnet.database.admin import list_sessions
+    from herringnet.database.db import Database
+
+    db = Database(DB_PATH)
+    rows = list_sessions(db)
+    db.close()
+    return JSONResponse(rows)
+
+
+@app.post("/delete-session")
+async def delete_session_endpoint(label: str = Form(...)) -> JSONResponse:
+    from herringnet.database.admin import delete_session
+    from herringnet.database.db import Database
+
+    db = Database(DB_PATH)
+    summary = delete_session(db, label.strip(), archive_dir=ARCHIVE_DIR)
+    db.close()
+    if summary["sessions"] == 0:
+        return JSONResponse({"detail": f"No session named {label!r}"}, status_code=404)
+    return JSONResponse(summary)
 
 
 @app.post("/upload")

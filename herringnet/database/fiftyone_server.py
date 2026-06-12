@@ -127,18 +127,41 @@ def main() -> None:
         dataset, address="127.0.0.1", port=port, remote=True, auto=False
     )
 
+    from fiftyone import ViewField as F
+
     while True:
         try:
             db = Database(db_path)
             samples = _new_samples(fo, db, image_root, known_ids)
+            valid_ids = {
+                int(r["image_id"]) for r in db.query(
+                    "SELECT image_id FROM images WHERE file_exists = 1"
+                )
+            }
             db.close()
+
+            changed = False
             if samples:
                 dataset.add_samples(samples, progress=False)
                 known_ids.update(int(s["db_image_id"]) for s in samples)
-                session.refresh()
+                changed = True
                 logger.info(
                     "Added %d new samples (total %d)", len(samples), len(dataset)
                 )
+
+            # Prune samples whose images were deleted from the database.
+            stale = known_ids - valid_ids
+            if stale:
+                view = dataset.match(F("db_image_id").is_in(list(stale)))
+                n = len(view)
+                if n:
+                    dataset.delete_samples(view)
+                known_ids -= stale
+                changed = True
+                logger.info("Pruned %d deleted samples (total %d)", n, len(dataset))
+
+            if changed:
+                session.refresh()
         except Exception:  # noqa: BLE001 - keep serving even if a refresh fails
             logger.exception("Refresh failed; will retry")
         time.sleep(REFRESH_SECONDS)
