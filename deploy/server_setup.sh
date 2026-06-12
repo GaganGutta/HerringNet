@@ -58,7 +58,27 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
-# --- Caddy: password-gated HTTP on port 80 ----------------------------------
+# --- systemd: FiftyOne app (requires `pip install fiftyone` in the venv) ----
+cat > /etc/systemd/system/herringnet-fiftyone.service <<EOF
+[Unit]
+Description=HerringNet FiftyOne app (synced with the database)
+After=network.target
+
+[Service]
+WorkingDirectory=$APP
+Environment=HN_DB=$DATA/herringnet.db
+Environment=HN_ARCHIVE=$DATA/archive
+Environment=HN_FO_PORT=5152
+Environment=FIFTYONE_DATABASE_DIR=$DATA/fiftyone
+ExecStart=$PY/python -m herringnet.database.fiftyone_server
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# --- Caddy: password-gated HTTP (viewer/upload on :80, FiftyOne on :5151) ---
 # TEAM_PASSWORD must be exported by the caller.
 HASH=$(caddy hash-password --plaintext "$TEAM_PASSWORD")
 cat > /etc/caddy/Caddyfile <<EOF
@@ -75,10 +95,18 @@ cat > /etc/caddy/Caddyfile <<EOF
 	}
 	redir / /db/ 302
 }
+
+:5151 {
+	basic_auth {
+		team $HASH
+	}
+	reverse_proxy 127.0.0.1:5152
+}
 EOF
 
 systemctl daemon-reload
 systemctl enable --now herringnet-upload herringnet-watch herringnet-datasette
+systemctl enable --now herringnet-fiftyone || true  # needs fiftyone installed
 systemctl restart caddy
 
 sleep 2
