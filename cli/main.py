@@ -40,6 +40,7 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # Import and register subcommands
+    from cli.commands.batch import add_batch_parser
     from cli.commands.db import add_db_parser
     from cli.commands.detect import add_detect_parser
     from cli.commands.extract import add_extract_parser
@@ -48,6 +49,7 @@ def main() -> None:
     from cli.commands.train import add_train_parser
 
     add_detect_parser(subparsers)
+    add_batch_parser(subparsers)
     add_extract_parser(subparsers)
     add_train_parser(subparsers)
     add_setup_data_parser(subparsers)

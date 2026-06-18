@@ -232,3 +232,44 @@ class TestDeleteSession:
         # Deleting a nonexistent session is a no-op.
         assert delete_session(db, "nope", archive_dir=archive)["sessions"] == 0
         db.close()
+
+
+class TestBatch:
+    """Fast folder batch detection plumbing (model mocked for speed)."""
+
+    def test_run_batch(self, tmp_path, monkeypatch):
+        pytest.importorskip("PIL")
+        from PIL import Image
+
+        import herringnet.inference.batch as batch_mod
+        from herringnet.config import HerringNetConfig
+
+        in_dir = tmp_path / "imgs"
+        in_dir.mkdir()
+        for n in range(3):
+            Image.new("RGB", (64, 48), (n, n, n)).save(in_dir / f"img{n}.jpg")
+
+        # Fake detector: one result per input image, no boxes.
+        class _Result:
+            boxes = None
+            names: dict = {}
+
+        class _Model:
+            def predict(self, source, **kwargs):
+                return [_Result() for _ in source]
+
+        class _FakeDetector:
+            def __init__(self, _config):
+                self.model = _Model()
+
+        monkeypatch.setattr(batch_mod, "FishDetector", _FakeDetector)
+
+        out = tmp_path / "out"
+        summary = batch_mod.run_batch(
+            HerringNetConfig(), in_dir, output_dir=out, batch_size=2
+        )
+
+        assert summary["images"] == 3
+        assert summary["total_fish"] == 0
+        assert (out / "counts.csv").exists()
+        assert (out / "results.json").exists()
