@@ -33,6 +33,22 @@ pip install -e ".[dev]"
 
 ## Quick Start
 
+### Fastest: detect a whole folder
+
+Drop a folder of images in, get annotated images plus a counts CSV out.
+On Windows, drag the image folder onto **`Detect Folder.bat`**. Or:
+
+```bash
+herringnet batch path/to/image_folder
+# -> outputs/<folder name>/annotated/*.jpg  and  counts.csv
+```
+
+This runs one fast batched pass per image (no SAHI tiling), which is the
+right tool for processing many images. Use `herringnet detect ... --sahi`
+only when you need maximum small-fish recall on a few images.
+
+### Other commands
+
 ```bash
 # Run detection on an image
 herringnet detect path/to/image.jpg --save-images
