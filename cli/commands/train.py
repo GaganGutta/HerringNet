@@ -29,7 +29,8 @@ def add_train_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     parser.add_argument(
         "--base-model", type=str, default=None,
-        help="Base model to fine-tune (default: yolov8n-cls.pt for classify, yolov8s.pt for detect)",
+        help="Base model to fine-tune "
+             "(default: yolov8n-cls.pt for classify, yolov8s.pt for detect)",
     )
     parser.add_argument(
         "--epochs", type=int, default=50,
@@ -69,7 +70,7 @@ def run_train(args: argparse.Namespace) -> None:
         image_size = args.image_size or 224
         name = args.name or "herringnet-cls"
 
-        console.print(f"[bold]Training species classifier[/bold]")
+        console.print("[bold]Training species classifier[/bold]")
         console.print(f"  Base model:  {base_model}")
         console.print(f"  Data:        {args.data}")
         console.print(f"  Epochs:      {args.epochs}")
@@ -86,10 +87,10 @@ def run_train(args: argparse.Namespace) -> None:
             project=args.project,
             name=name,
         )
-        console.print(f"\n[green]Training complete![/green]")
+        console.print("\n[green]Training complete![/green]")
         console.print(f"Best weights: {best_weights}")
         console.print(
-            f"\nTo use this model, set classifier.model_path in your config:"
+            "\nTo use this model, set classifier.model_path in your config:"
         )
         console.print(f'  classifier.model_path: "{best_weights}"')
 
@@ -98,7 +99,7 @@ def run_train(args: argparse.Namespace) -> None:
         image_size = args.image_size or 640
         name = args.name or "herringnet-det"
 
-        console.print(f"[bold]Training fish detector[/bold]")
+        console.print("[bold]Training fish detector[/bold]")
         console.print(f"  Base model:  {base_model}")
         console.print(f"  Data:        {args.data}")
         console.print(f"  Epochs:      {args.epochs}")
@@ -115,5 +116,5 @@ def run_train(args: argparse.Namespace) -> None:
             project=args.project,
             name=name,
         )
-        console.print(f"\n[green]Training complete![/green]")
+        console.print("\n[green]Training complete![/green]")
         console.print(f"Best weights: {best_weights}")

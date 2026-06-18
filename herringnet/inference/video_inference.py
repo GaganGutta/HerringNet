@@ -12,7 +12,6 @@ import logging
 from pathlib import Path
 
 import cv2
-from tqdm import tqdm
 
 from herringnet.config import HerringNetConfig
 from herringnet.inference.result_types import VideoResult

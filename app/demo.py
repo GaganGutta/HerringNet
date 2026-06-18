@@ -8,14 +8,11 @@ quick demos and visual inspection of model results.
 from __future__ import annotations
 
 import logging
-import tempfile
-from pathlib import Path
 
 import cv2
 import gradio as gr
-import numpy as np
 
-from herringnet.config import HerringNetConfig, load_config
+from herringnet.config import HerringNetConfig
 from herringnet.inference.result_types import FrameResult, VideoResult
 from herringnet.models.pipeline import HerringNetPipeline
 from herringnet.visualization.draw_detections import draw_detections
@@ -137,7 +134,11 @@ def create_demo(config: HerringNetConfig) -> gr.Blocks:
             )
 
         with gr.Tab("About"):
-            _mode = "Detection + Classification" if pipeline.classifier else "Detection Only"
+            _mode = (
+                "Detection + Classification"
+                if pipeline.classifier
+                else "Detection Only"
+            )
             gr.Markdown(
                 f"## Model Information\n\n"
                 f"- **Mode:** {_mode}\n"
@@ -149,7 +150,8 @@ def create_demo(config: HerringNetConfig) -> gr.Blocks:
                 f"## About HerringNet\n\n"
                 f"HerringNet is a fish detection and species classification tool "
                 f"built for monitoring juvenile river herring emigration from "
-                f"underwater camera traps. Developed at Jordaan Labs, UMass Amherst.\n\n"
+                f"underwater camera traps. Developed at Jordaan Labs, "
+                f"UMass Amherst.\n\n"
                 f"The two-stage pipeline uses pretrained fish detection (CFD) "
                 f"followed by species-level classification."
             )

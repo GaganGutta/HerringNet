@@ -81,12 +81,6 @@ def add_detect_parser(subparsers: argparse._SubParsersAction) -> None:
 def run_detect(args: argparse.Namespace) -> None:
     """Execute the detect command."""
     from herringnet.config import load_config
-    from herringnet.models.pipeline import HerringNetPipeline, save_results_json
-    from herringnet.visualization.draw_detections import save_annotated_image
-    from herringnet.inference.video_inference import (
-        process_video_file,
-        save_counts_csv,
-    )
 
     # Build config overrides from CLI args
     overrides = {}
@@ -127,9 +121,10 @@ def run_detect(args: argparse.Namespace) -> None:
 
 def _detect_image(config, source: Path, output_dir: Path, args) -> None:
     """Run detection on a single image."""
+    import cv2
+
     from herringnet.models.pipeline import HerringNetPipeline, save_results_json
     from herringnet.visualization.draw_detections import save_annotated_image
-    import cv2
 
     console.print(f"Processing image: [bold]{source}[/bold]")
 
@@ -156,6 +151,7 @@ def _detect_image(config, source: Path, output_dir: Path, args) -> None:
     # Save crops
     if args.save_crops and result.detections:
         import cv2 as cv
+
         from herringnet.models.detector import FishDetector
 
         image = cv.imread(str(source))
@@ -173,11 +169,11 @@ def _detect_image(config, source: Path, output_dir: Path, args) -> None:
 
 def _detect_video(config, source: Path, output_dir: Path, args) -> None:
     """Run detection on a video file."""
-    from herringnet.models.pipeline import save_results_json
     from herringnet.inference.video_inference import (
         process_video_file,
         save_counts_csv,
     )
+    from herringnet.models.pipeline import save_results_json
 
     console.print(f"Processing video: [bold]{source}[/bold]")
 
@@ -209,9 +205,10 @@ def _detect_video(config, source: Path, output_dir: Path, args) -> None:
 
 def _detect_directory(config, source: Path, output_dir: Path, args) -> None:
     """Run detection on all images in a directory."""
+    import cv2
+
     from herringnet.models.pipeline import HerringNetPipeline, save_results_json
     from herringnet.visualization.draw_detections import save_annotated_image
-    import cv2
 
     console.print(f"Processing directory: [bold]{source}[/bold]")
 
@@ -288,7 +285,7 @@ def _print_video_summary(result) -> None:
     """Print a summary of video processing results."""
     counts = result.counts
 
-    console.print(f"\n[bold]Video Processing Summary[/bold]")
+    console.print("\n[bold]Video Processing Summary[/bold]")
     console.print(f"  Frames extracted:  {result.total_frames_extracted}")
     console.print(f"  Frames with fish:  {counts.frames_with_fish}")
     console.print(f"  Raw fish count:    {counts.raw_total}")

@@ -16,6 +16,7 @@ import logging
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 from herringnet.config import FrameExtractionConfig
 from herringnet.inference.result_types import FrameInfo, VideoMetadata
@@ -133,7 +134,7 @@ class FrameExtractor:
         self,
         video_path: str | Path,
         max_frames: int | None = None,
-    ) -> list[tuple[FrameInfo, "np.ndarray"]]:
+    ) -> list[tuple[FrameInfo, np.ndarray]]:
         """Extract frames from video and return them in memory.
 
         Similar to extract_frames but does not save to disk. Returns
@@ -155,7 +156,7 @@ class FrameExtractor:
             raise RuntimeError(f"Failed to open video: {video_path}")
 
         metadata = self._read_metadata(cap)
-        frames: list[tuple[FrameInfo, "np.ndarray"]] = []
+        frames: list[tuple[FrameInfo, np.ndarray]] = []
         frame_number = 0
         extracted_count = 0
 

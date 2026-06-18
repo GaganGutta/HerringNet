@@ -74,7 +74,7 @@ class DatasetManager:
 
         rf = Roboflow(api_key=self._api_key)
         rf_project = rf.workspace(workspace).project(project)
-        dataset = rf_project.version(version).download(
+        rf_project.version(version).download(
             export_format,
             location=str(self.data_dir / f"{project}-v{version}"),
         )
