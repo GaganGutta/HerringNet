@@ -44,8 +44,8 @@ def add_review_parser(subparsers: argparse._SubParsersAction) -> None:
 
 def run_review(args: argparse.Namespace) -> None:
     """Execute the review command."""
-    from herringnet.training.active_learning import ActiveLearningManager
     from herringnet.config import ActiveLearningConfig
+    from herringnet.training.active_learning import ActiveLearningManager
 
     al_config = ActiveLearningConfig(review_output_dir=args.queue_dir)
     manager = ActiveLearningManager(al_config)
@@ -76,7 +76,7 @@ def _show_stats(manager, queue_dir: str) -> None:
     json_files = list(queue_path.glob("*.json"))
     image_files = list(queue_path.glob("*.jpg")) + list(queue_path.glob("*.png"))
 
-    console.print(f"[bold]Review Queue Statistics[/bold]")
+    console.print("[bold]Review Queue Statistics[/bold]")
     console.print(f"  Queue directory:   {queue_path}")
     console.print(f"  Items in queue:    {len(json_files)}")
     console.print(f"  Image files:       {len(image_files)}")

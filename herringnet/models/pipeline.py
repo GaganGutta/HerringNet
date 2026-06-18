@@ -15,13 +15,13 @@ import logging
 import time
 from pathlib import Path
 
-import cv2
 from tqdm import tqdm
 
 from herringnet.config import HerringNetConfig
 from herringnet.data.frame_extractor import FrameExtractor
 from herringnet.inference.result_types import (
     Classification,
+    Detection,
     FrameResult,
     PipelineDetection,
     VideoResult,
@@ -170,6 +170,7 @@ class HerringNetPipeline:
         """
         video_path = Path(video_path)
         start_time = time.time()
+        det_config = self.config.detector
 
         metadata = self.frame_extractor.get_video_metadata(video_path)
 
@@ -293,7 +294,7 @@ class HerringNetPipeline:
 
     def _check_uncertainty(
         self,
-        det: "Detection",
+        det: Detection,
         cls: Classification,
     ) -> tuple[bool, str | None]:
         """Check if a detection should be flagged for human review.

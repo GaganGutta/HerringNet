@@ -7,13 +7,10 @@ are marked with @pytest.mark.integration.
 
 from __future__ import annotations
 
-import pytest
-
 from herringnet.inference.result_types import (
     Classification,
     CountPair,
     CountResult,
-    Detection,
     FrameResult,
     PipelineDetection,
     VideoResult,

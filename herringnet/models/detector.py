@@ -125,36 +125,44 @@ class FishDetector:
         from sahi import AutoDetectionModel
         from sahi.predict import get_sliced_prediction
 
-        # Load image if given a path
+        # Load image if given a path; otherwise write a temp file for SAHI.
+        temp_path: Path | None = None
         if isinstance(source, (str, Path)):
             image_path = str(source)
         else:
-            # SAHI needs a file path or PIL image, so save temp if ndarray
             import tempfile
             tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+            tmp.close()  # release the handle so cv2 can write (and Windows can unlink)
             cv2.imwrite(tmp.name, source)
             image_path = tmp.name
+            temp_path = Path(tmp.name)
 
-        # Lazy-load the SAHI detection model wrapper
-        if self._sahi_model is None:
-            registry = ModelRegistry()
-            model_path = registry.get_model_path(self.config.model_name)
-            self._sahi_model = AutoDetectionModel.from_pretrained(
-                model_type="ultralytics",
-                model_path=model_path,
-                confidence_threshold=self.config.confidence_threshold,
-                device=self.config.device,
+        try:
+            # Lazy-load the SAHI detection model wrapper
+            if self._sahi_model is None:
+                registry = ModelRegistry()
+                model_path = registry.get_model_path(self.config.model_name)
+                self._sahi_model = AutoDetectionModel.from_pretrained(
+                    model_type="ultralytics",
+                    model_path=model_path,
+                    confidence_threshold=self.config.confidence_threshold,
+                    device=self.config.device,
+                )
+
+            result = get_sliced_prediction(
+                image=image_path,
+                detection_model=self._sahi_model,
+                slice_height=slice_size,
+                slice_width=slice_size,
+                overlap_height_ratio=overlap_ratio,
+                overlap_width_ratio=overlap_ratio,
+                verbose=0,
             )
-
-        result = get_sliced_prediction(
-            image=image_path,
-            detection_model=self._sahi_model,
-            slice_height=slice_size,
-            slice_width=slice_size,
-            overlap_height_ratio=overlap_ratio,
-            overlap_width_ratio=overlap_ratio,
-            verbose=0,
-        )
+        finally:
+            # Always clean up the temp frame, even on error, to avoid filling
+            # the disk when processing video frame-by-frame with SAHI.
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
 
         detections = []
         for pred in result.object_prediction_list:

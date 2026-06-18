@@ -55,7 +55,10 @@ class HerringNetTrainer:
         logger.info("Starting classifier training")
         logger.info("  Base model: %s", base_model)
         logger.info("  Data: %s", data_path)
-        logger.info("  Epochs: %d, Batch: %d, ImgSz: %d", epochs, batch_size, image_size)
+        logger.info(
+            "  Epochs: %d, Batch: %d, ImgSz: %d",
+            epochs, batch_size, image_size,
+        )
 
         model = YOLO(base_model)
 
@@ -74,7 +77,7 @@ class HerringNetTrainer:
         if freeze_layers is not None:
             train_kwargs["freeze"] = freeze_layers
 
-        results = model.train(**train_kwargs)
+        model.train(**train_kwargs)
 
         best_path = Path(project) / name / "weights" / "best.pt"
         if best_path.exists():
@@ -123,7 +126,10 @@ class HerringNetTrainer:
         logger.info("Starting detector training")
         logger.info("  Base model: %s", base_model)
         logger.info("  Data: %s", data_path)
-        logger.info("  Epochs: %d, Batch: %d, ImgSz: %d", epochs, batch_size, image_size)
+        logger.info(
+            "  Epochs: %d, Batch: %d, ImgSz: %d",
+            epochs, batch_size, image_size,
+        )
 
         model = YOLO(base_model)
 
@@ -142,7 +148,7 @@ class HerringNetTrainer:
         if freeze_layers is not None:
             train_kwargs["freeze"] = freeze_layers
 
-        results = model.train(**train_kwargs)
+        model.train(**train_kwargs)
 
         best_path = Path(project) / name / "weights" / "best.pt"
         if best_path.exists():

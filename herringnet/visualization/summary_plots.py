@@ -9,10 +9,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")  # Non-interactive backend for saving plots
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 
 from herringnet.inference.result_types import FrameResult, VideoResult
 
