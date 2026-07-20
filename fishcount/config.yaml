@@ -1,0 +1,18 @@
+# fishcount settings. Everything here is optional: CLI flags override these,
+# and these override the built-in defaults. Uncomment a line to change it.
+
+# Path to the Community Fish Detector weights (never auto-downloaded).
+#model_path: models/cfd-yolov12x.pt
+
+# Minimum detection confidence, 0 to 1.
+#conf: 0.25
+
+# NMS IoU threshold, 0 to 1 (how much boxes may overlap before being merged).
+#iou: 0.5
+
+# Inference image size in pixels. The model was trained at 1024.
+# Lower (e.g. 640) is noticeably faster on CPU, with some loss of small-fish recall.
+#imgsz: 1024
+
+# Images per model pass. Lower this if you run out of RAM.
+#batch_size: 8
