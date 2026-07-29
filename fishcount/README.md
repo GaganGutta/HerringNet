@@ -56,21 +56,118 @@ output\dive1\
 | --- | --- | --- |
 | `--out DIR` | `output/<folder name>` | Where to write results |
 | `--conf FLOAT` | `0.25` | Confidence threshold (raise to cut false positives) |
-| `--imgsz INT` | `1024` | Inference size; lower is faster, 1024 matches training |
+| `--imgsz INT` | `1024` | Inference size; higher finds more small fish, much slower |
+| `--iou FLOAT` | `0.7` | NMS IoU; higher keeps tightly packed fish |
+| `--max-det INT` | `1000` | Max detections per image (Ultralytics silently caps at 300 otherwise) |
 | `--batch-size INT` | `8` | Images per model pass; lower it if RAM is tight |
+| `--dense` | off | Recall-first preset for dense schools of small fish (see below) |
+| `--slice-size INT` | `640` | SAHI tile size (`--thorough` only); smaller finds smaller fish |
+| `--overlap FLOAT` | `0.2` | SAHI tile overlap (`--thorough` only) |
 | `--no-images` | off | Counts only, skip writing annotated images |
 | `--thorough` | off | SAHI tiled inference for very small fish (much slower) |
 | `--open` | off | Open the output folder when finished |
 
 Defaults can also be set in [config.yaml](config.yaml). Precedence:
-CLI flags > config.yaml > built-in defaults.
+CLI flags > `--dense` preset > config.yaml > built-in defaults.
+
+## Dense schools of small fish (important)
+
+The default settings are tuned for sparse-to-moderate scenes with clearly
+separated fish. On a **dense school of small fish**, full-frame detection at
+1024 px misses most of them and can report **zero** on a frame that visibly
+holds hundreds, because each fish shrinks to a few pixels after downscaling.
+
+Use `--dense` for these frames. It lowers the confidence threshold, raises the
+inference size, and removes the 300-detection cap. Add `--thorough` to also
+switch to SAHI tiling, which is the strongest recall setting:
+
+```
+fishcount detect "C:\path\to\images" --dense            # much better, still CPU-friendly
+fishcount detect "C:\path\to\images" --dense --thorough # maximum recall, slow
+```
+
+Measured on one laptop CPU, on two 4000x3000 frames that the default run scored
+**0**, plus a moderate frame the default scored 11:
+
+| Setting | dense frame A | dense frame B | moderate frame | speed |
+| --- | --- | --- | --- | --- |
+| default (1024) | 0 | 0 | 11 | ~2 s/img |
+| `--dense` (1536) | 16 | 17 | 33 | ~6 s/img |
+| `--dense --thorough` (tile 640) | ~67 | ~94 | ~87 | ~30-45 s/img |
+
+### The honest ceiling
+
+None of these settings counts a dense school *accurately*. Bounding-box
+detection systematically **undercounts** crowds, and the error grows with
+density: overlapping fish get merged by NMS, few-pixel bodies have no clear
+edges, and a packed 3-D school is under-determined from one 2-D frame. Even the
+strongest setting recovers on the order of dozens-to-low-hundreds from a frame
+that may hold a thousand fry. So:
+
+- For **sparse, separated fish**, treat the count as a real count.
+- For **dense schools**, treat the number as a **relative-abundance index / lower
+  bound**, good for comparing frames, sites, or time points under similar
+  conditions, not for stating an exact population. Validate against hand counts
+  on a few frames before trusting absolute numbers, and note the density band
+  where the tool stays reliable.
+- A truly accurate dense count needs a different method (density-map estimation,
+  or acoustics such as imaging sonar), which is out of scope for this offline
+  box detector.
+
+## Pipeline: base pass, then dense only where there are fish
+
+`fishcount pipeline` runs the whole workflow in one command. Because `--dense`
+(low confidence) produces false positives on empty/murky water, the pipeline
+first runs a **presence gate** over every frame, then re-runs the high-recall
+settings only on frames that actually held fish, so they never touch empty frames.
+
+```
+fishcount pipeline "C:\path\to\104GOPRO" --name 104GOPROFINAL --min-count 1
+```
+
+Three stages, written to separate folders under `output\<name>\`:
+
+1. `base\`     presence gate over every image: is there a fish here?
+2. `dense\`    `--dense`, only frames with at least `--min-count` fish.
+3. `thorough\` `--dense --thorough` (SAHI tiling), same subset.
+
+**The base pass is a gate, not a count.** It answers "does this frame contain a
+fish, big or small?" so the frame can go on to be counted. Two things make it
+reliable where a plain pass fails:
+
+- It runs at `--base-imgsz` (default 1536) so dense schools of tiny fish
+  register at all (at 1024 they read as 0 and get dropped before the dense passes).
+- It discards any detection larger than `--base-max-box-frac` of the frame
+  (default 0.10). Empty/murky water gets misread as one giant fish-shaped box;
+  real fish are only a few percent of the frame (measured: <5%, while these
+  false positives are >=10%, with a clean gap between), so this removes them
+  without losing real detections. The same size filter is applied in the
+  `--dense` passes.
+
+Use `--min-count 1` to send every frame with any fish to the counting passes
+(maximum recall of fish-bearing frames), or a higher value to be stricter.
+
+Two false-positive types to know about: the size filter removes *oversized*
+boxes (empty water read as one big fish). It cannot remove *small* boxes on
+water-surface ripple/caustic texture, which look like a distant fish and are
+genuinely ambiguous. Those show up as single-detection frames (`base_count == 1`
+in `summary.csv`), so with `--min-count 1` you can eyeball just those to reject
+ripple hits by hand.
+
+Plus `summary.csv` at the top, comparing base vs dense vs thorough counts per
+frame. Flags: `--name` / `--out`, `--min-count N`, `--base-imgsz`,
+`--base-max-box-frac`, `--no-images`, `--open`.
+
+The dense/thorough counts here are recall-first; read them as a relative
+abundance index, not exact totals (see the ceiling note above).
 
 ## Speed on CPU
 
 YOLOv12x at image size 1024 is the accurate-but-heavy setting. On a laptop CPU
-expect a few seconds per image. If you need it faster:
+expect a few seconds per image. Levers:
 
-- `--imgsz 640` is roughly 2-3x faster, with some loss of small-fish recall.
+- `--imgsz 640` is roughly 2-3x faster, with loss of small-fish recall.
+  `--imgsz 1536/2048` finds more small fish, at ~2.5x / ~4x the cost.
 - `--no-images` skips encoding and writing annotated images.
 - `--batch-size` mostly trades RAM, not speed, on CPU; lower it if memory is tight.
 
@@ -84,9 +181,11 @@ pip install -e ".[thorough]"
 fishcount detect "C:\path\to\images" --thorough
 ```
 
-Slices each image into overlapping 1024 px tiles (SAHI), detects per tile, and
-merges. Catches small distant fish that full-frame inference misses, at many
-times the runtime. Off by default on purpose.
+Slices each image into overlapping tiles (SAHI, default 640 px via
+`--slice-size`), detects per tile at native resolution, and merges. Catches
+small distant fish that full-frame inference misses, at many times the runtime.
+Smaller tiles find smaller fish. Off by default on purpose; combine with
+`--dense` for the strongest recall on schools.
 
 ## Phase 2 design: sequences and video (not built yet)
 

@@ -11,8 +11,20 @@
 #iou: 0.5
 
 # Inference image size in pixels. The model was trained at 1024.
-# Lower (e.g. 640) is noticeably faster on CPU, with some loss of small-fish recall.
+# Lower (e.g. 640) is faster on CPU; higher (1536/2048) finds more small fish
+# at a steep CPU cost. This is the single biggest lever for small-fish recall.
 #imgsz: 1024
 
 # Images per model pass. Lower this if you run out of RAM.
 #batch_size: 8
+
+# Max detections kept per image. Ultralytics silently caps this at 300 by
+# default, which truncates very dense schools. Raise it if a frame may hold
+# hundreds of fish.
+#max_det: 1000
+
+# SAHI tiled-inference settings, used only with --thorough.
+# Smaller tiles magnify tiny fish (640 or 512 work well on 4000 px frames);
+# more overlap recovers fish cut by tile seams, at proportional extra cost.
+#slice_size: 640
+#overlap_ratio: 0.2

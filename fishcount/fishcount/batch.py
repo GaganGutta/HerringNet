@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import io
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,7 +19,7 @@ from tqdm import tqdm
 
 from fishcount.config import AppConfig
 from fishcount.count import ImageResult, total_fish, write_counts_csv, write_results_json
-from fishcount.detector import Detector, ImageArray
+from fishcount.detector import Detection, Detector, ImageArray
 from fishcount.draw import annotate
 
 IMAGE_EXTENSIONS = {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
@@ -57,23 +57,33 @@ class BatchSummary:
         return self.seconds / self.processed if self.processed else 0.0
 
 
-def discover_images(input_dir: Path, exclude_dir: Path | None = None) -> list[Path]:
+def discover_images(
+    input_dir: Path,
+    exclude_dir: Path | None = None,
+    only: Collection[Path] | None = None,
+) -> list[Path]:
     """All images under input_dir (recursive), in sorted order.
 
     Sorted order doubles as frame order for Phase 2 sequence counting. Anything
     under exclude_dir is skipped so a previous run's output inside the input
-    folder is never re-detected.
+    folder is never re-detected. If `only` is given, discovery is restricted to
+    images whose resolved path is in it, which is how a pipeline stage re-runs on
+    just the frames a prior stage flagged.
     """
     exclude: Path | None = None
     if exclude_dir is not None:
         resolved = exclude_dir.resolve()
         if _is_within(resolved, input_dir.resolve()):
             exclude = resolved
+    only_set = {path.resolve() for path in only} if only is not None else None
     images: list[Path] = []
     for path in sorted(input_dir.rglob("*")):
         if not path.is_file() or path.suffix.lower() not in IMAGE_EXTENSIONS:
             continue
-        if exclude is not None and _is_within(path.resolve(), exclude):
+        resolved_path = path.resolve()
+        if exclude is not None and _is_within(resolved_path, exclude):
+            continue
+        if only_set is not None and resolved_path not in only_set:
             continue
         images.append(path)
     return images
@@ -108,13 +118,15 @@ def run_batch(
     write_images: bool = True,
     show_progress: bool = True,
     model_path: Path | None = None,
+    only: Collection[Path] | None = None,
 ) -> BatchSummary:
     """Detect fish in every image under input_dir and write all outputs.
 
-    Inference runs in batches of config.batch_size. Unreadable images are
-    skipped with a warning and recorded in results.json.
+    If `only` is given, just those frames are processed (used by the pipeline to
+    re-run a subset). Inference runs in batches of config.batch_size. Unreadable
+    images are skipped with a warning and recorded in results.json.
     """
-    images = discover_images(input_dir, exclude_dir=out_dir)
+    images = discover_images(input_dir, exclude_dir=out_dir, only=only)
     if not images:
         extensions = ", ".join(sorted(IMAGE_EXTENSIONS))
         raise NoImagesFoundError(f"No images found under {input_dir} (extensions: {extensions})")
@@ -143,9 +155,13 @@ def run_batch(
                 batch_detections = detector.detect_batch([array for _, array in loaded])
                 for (path, array), detections in zip(loaded, batch_detections, strict=True):
                     relative = path.relative_to(input_dir)
+                    height, width = array.shape[:2]
+                    if config.max_box_frac < 1.0:
+                        detections = _filter_by_box_fraction(
+                            detections, width, height, config.max_box_frac
+                        )
                     if write_images:
                         _write_annotated(annotate(array, detections), annotated_dir / relative)
-                    height, width = array.shape[:2]
                     per_path[path] = ImageResult(relative.as_posix(), width, height, detections)
                     fish_so_far += len(detections)
                     progress.update(1)
@@ -185,6 +201,25 @@ def _write_annotated(image: ImageArray, dest: Path) -> None:
     if not ok:
         raise OSError(f"could not encode annotated image for {dest}")
     encoded.tofile(str(dest))
+
+
+def _filter_by_box_fraction(
+    detections: list[Detection], width: int, height: int, max_frac: float
+) -> list[Detection]:
+    """Drop detections whose box covers more than max_frac of the frame area.
+
+    Used by the pipeline's presence gate: real fish are compact, so an oversized
+    box is empty/murky water misread as one giant fish.
+    """
+    area = float(width * height)
+    if area <= 0:
+        return detections
+    keep: list[Detection] = []
+    for det in detections:
+        box_area = (det.x2 - det.x1) * (det.y2 - det.y1)
+        if box_area / area <= max_frac:
+            keep.append(det)
+    return keep
 
 
 def _exif_orientation(data: bytes) -> int:

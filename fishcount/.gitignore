@@ -13,6 +13,7 @@ models/*.pt
 
 # tool output
 output/
+last-run.log
 
 # caches
 .pytest_cache/

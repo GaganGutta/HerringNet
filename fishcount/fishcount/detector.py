@@ -95,6 +95,7 @@ class YoloDetector:
         self._conf = config.conf
         self._iou = config.iou
         self._imgsz = config.imgsz
+        self._max_det = config.max_det
 
     def detect_batch(self, images: Sequence[ImageArray]) -> list[list[Detection]]:
         """One forward pass over the whole batch. Every detection is a fish."""
@@ -105,6 +106,7 @@ class YoloDetector:
             conf=self._conf,
             iou=self._iou,
             imgsz=self._imgsz,
+            max_det=self._max_det,
             verbose=False,
         )
         return [_to_detections(output) for output in outputs]
@@ -134,9 +136,10 @@ class SahiDetector:
             model_path=str(weights),
             confidence_threshold=config.conf,
             device="cpu",
-            image_size=config.imgsz,
+            image_size=config.slice_size,
         )
-        self._slice = min(config.imgsz, 1024)
+        self._slice = config.slice_size
+        self._overlap = config.overlap_ratio
 
     def detect_batch(self, images: Sequence[ImageArray]) -> list[list[Detection]]:
         results: list[list[Detection]] = []
@@ -146,8 +149,10 @@ class SahiDetector:
                 self._model,
                 slice_height=self._slice,
                 slice_width=self._slice,
-                overlap_height_ratio=0.2,
-                overlap_width_ratio=0.2,
+                overlap_height_ratio=self._overlap,
+                overlap_width_ratio=self._overlap,
+                perform_standard_pred=True,
+                postprocess_class_agnostic=True,
                 verbose=0,
             )
             detections: list[Detection] = []

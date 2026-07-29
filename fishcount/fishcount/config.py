@@ -26,9 +26,21 @@ class AppConfig(BaseModel):
 
     model_path: Path = DEFAULT_MODEL_PATH
     conf: float = Field(default=0.25, ge=0.0, le=1.0)
-    iou: float = Field(default=0.5, ge=0.0, le=1.0)
+    iou: float = Field(default=0.7, ge=0.0, le=1.0)
     imgsz: int = Field(default=1024, ge=32, le=8192)
     batch_size: int = Field(default=8, ge=1, le=256)
+    # Per-image detection cap. Ultralytics silently defaults this to 300, which
+    # truncates dense schools; we set it high and expose it.
+    max_det: int = Field(default=1000, ge=1, le=100000)
+    # SAHI tiled-inference settings (only used with --thorough). Smaller tiles
+    # magnify tiny fish; more overlap recovers fish cut by tile seams.
+    slice_size: int = Field(default=640, ge=64, le=2048)
+    overlap_ratio: float = Field(default=0.2, ge=0.0, lt=0.9)
+    # Drop any detection whose box covers more than this fraction of the frame.
+    # Real fish are compact (<5% of frame here); murky/empty water gets misread
+    # as one huge fish-shaped box, so a size cap removes those false positives.
+    # 1.0 disables the filter (the default; counting passes leave it off).
+    max_box_frac: float = Field(default=1.0, ge=0.01, le=1.0)
 
 
 def load_config(path: Path | None = None) -> AppConfig:

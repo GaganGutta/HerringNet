@@ -76,6 +76,23 @@ def test_corrupt_image_is_skipped_with_run_continuing(tmp_path: Path) -> None:
     assert entries["good.jpg"]["fish_count"] == 1
 
 
+def test_max_box_frac_drops_oversized_boxes(tmp_path: Path) -> None:
+    folder = tmp_path / "gate"
+    write_image(folder / "a.jpg", width=100, height=100)  # frame area 10000
+    # one compact fish (100 px^2 = 1% of frame) and one huge box (3600 = 36%).
+    small = fish(0, 0, 10, 10)
+    huge = fish(10, 10, 70, 70)
+    detector = FakeDetector([[small, huge]])
+    out = tmp_path / "out"
+
+    summary = run_batch(folder, out, AppConfig(max_box_frac=0.25), detector, show_progress=False)
+
+    assert summary.total_fish == 1  # the 36% box is dropped, the 1% box stays
+    payload = json.loads((out / "results.json").read_text(encoding="utf-8"))
+    boxes = payload["images"][0]["detections"]
+    assert boxes == [{"box": [0, 0, 10, 10], "confidence": 0.9}]
+
+
 def test_no_images_flag_skips_annotated_output(tmp_path: Path) -> None:
     folder = _input_folder(tmp_path)
     out = tmp_path / "out"
