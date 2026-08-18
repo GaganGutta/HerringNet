@@ -114,52 +114,50 @@ that may hold a thousand fry. So:
   or acoustics such as imaging sonar), which is out of scope for this offline
   box detector.
 
-## Pipeline: base pass, then dense only where there are fish
+## Pipeline: detection first, then count
 
-`fishcount pipeline` runs the whole workflow in one command. Because `--dense`
-(low confidence) produces false positives on empty/murky water, the pipeline
-first runs a **presence gate** over every frame, then re-runs the high-recall
-settings only on frames that actually held fish, so they never touch empty frames.
+`fishcount pipeline` is the main workflow, and it puts **detection ahead of
+counting**: the goal is to flag every frame that holds a fish (big or small),
+keep false positives quarantined rather than mixed in, and only then count.
 
 ```
-fishcount pipeline "C:\path\to\104GOPRO" --name 104GOPROFINAL --min-count 1
+fishcount pipeline "C:\path\to\104GOPRO" --name 104GOPROFINAL
 ```
 
-Three stages, written to separate folders under `output\<name>\`:
+Outputs under `output\<name>\`, in priority order:
 
-1. `base\`     presence gate over every image: is there a fish here?
-2. `dense\`    `--dense`, only frames with at least `--min-count` fish.
-3. `thorough\` `--dense --thorough` (SAHI tiling), same subset.
+1. `detections.csv`  one row per frame: `has_fish`, `tier`, `max_confidence`.
+   Fish frames sort first. This is the headline result.
+2. `detected\confident\`, `detected\review\`, `detected\possible\`
+   annotated copies of every flagged frame, by tier, so reviewing means
+   opening a folder.
+3. `base\`, `dense\`, `thorough\` and `summary.csv`: the counts.
 
-**The base pass is a gate, not a count.** It answers "does this frame contain a
-fish, big or small?" so the frame can go on to be counted. Two things make it
-reliable where a plain pass fails:
+**How the gate tiers frames.** The base pass runs at a low confidence floor
+(`--base-conf`, default 0.10; this costs no extra inference time) so nothing
+with a detection is silently dropped, and it discards oversized boxes
+(`--base-max-box-frac`, default 0.10; empty/murky water misread as one giant
+fish, while real fish are under 5% of the frame). Every frame then gets a tier:
 
-- It runs at `--base-imgsz` (default 1536) so dense schools of tiny fish
-  register at all (at 1024 they read as 0 and get dropped before the dense passes).
-- It discards any detection larger than `--base-max-box-frac` of the frame
-  (default 0.10). Empty/murky water gets misread as one giant fish-shaped box;
-  real fish are only a few percent of the frame (measured: <5%, while these
-  false positives are >=10%, with a clean gap between), so this removes them
-  without losing real detections. The same size filter is applied in the
-  `--dense` passes.
+| Tier | Meaning | Counted by default |
+| --- | --- | --- |
+| `confident` | 2+ detections at >= `--detect-conf` (0.25), or any at >= 0.50 | yes |
+| `review` | exactly one moderate detection (0.25-0.50): a lone distant fish or surface ripple, glance to decide | yes |
+| `possible` | only weak detections (0.10-0.25) | no (`--count-possible` to include) |
+| `none` | nothing | no |
 
-Use `--min-count 1` to send every frame with any fish to the counting passes
-(maximum recall of fish-bearing frames), or a higher value to be stricter.
+`--min-count N` sets how many real detections a frame needs to be counted
+(default 1). `--base-imgsz` (default 1536) is the gate resolution; 1024 misses
+dense schools entirely.
 
-Two false-positive types to know about: the size filter removes *oversized*
+Two false-positive types to know about. The size filter removes *oversized*
 boxes (empty water read as one big fish). It cannot remove *small* boxes on
 water-surface ripple/caustic texture, which look like a distant fish and are
-genuinely ambiguous. Those show up as single-detection frames (`base_count == 1`
-in `summary.csv`), so with `--min-count 1` you can eyeball just those to reject
-ripple hits by hand.
+genuinely ambiguous. Those land in `review`, so with a folder of hundreds of
+frames you only eyeball the review tier.
 
-Plus `summary.csv` at the top, comparing base vs dense vs thorough counts per
-frame. Flags: `--name` / `--out`, `--min-count N`, `--base-imgsz`,
-`--base-max-box-frac`, `--no-images`, `--open`.
-
-The dense/thorough counts here are recall-first; read them as a relative
-abundance index, not exact totals (see the ceiling note above).
+The dense/thorough counts are recall-first; read them as a relative abundance
+index, not exact totals (see the ceiling note above).
 
 ## Speed on CPU
 

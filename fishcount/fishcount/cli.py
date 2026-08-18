@@ -117,7 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     pipeline = subcommands.add_parser(
         "pipeline",
-        help="Full base pass, then re-run only the frames with fish in dense + thorough.",
+        help="Detection first: flag every frame with a fish, then count the flagged ones.",
     )
     pipeline.add_argument("folder", type=Path, help="Folder of images (subfolders included).")
     pipeline.add_argument(
@@ -131,9 +131,32 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline.add_argument(
         "--min-count",
         type=int,
-        default=2,
+        default=1,
         dest="min_count",
-        help="Base fish count a frame needs to enter the dense/thorough passes (default 2).",
+        help="Detections (at or above --detect-conf) a frame needs to be counted by the "
+        "dense/thorough passes (default 1: any real detection gets counted).",
+    )
+    pipeline.add_argument(
+        "--base-conf",
+        type=float,
+        default=0.10,
+        dest="base_conf",
+        help="Confidence floor for the base gate (default 0.10). Everything above it is "
+        "recorded; nothing is silently dropped. Costs no extra inference time.",
+    )
+    pipeline.add_argument(
+        "--detect-conf",
+        type=float,
+        default=0.25,
+        dest="detect_conf",
+        help="Confidence at which a detection counts as a real fish (default 0.25). "
+        "Detections between --base-conf and this are tiered 'possible'.",
+    )
+    pipeline.add_argument(
+        "--count-possible",
+        action="store_true",
+        dest="count_possible",
+        help="Also run the counting passes on 'possible' frames (weak detections only).",
     )
     pipeline.add_argument(
         "--base-imgsz",
@@ -257,8 +280,14 @@ def _pipeline_command(args: argparse.Namespace) -> int:
         # not how many. It runs at a higher imgsz so dense schools register (at
         # 1024 they read as 0 and never reach the dense passes), and drops
         # oversized boxes so empty/murky water is not misread as a giant fish.
+        if not args.base_conf < args.detect_conf:
+            errors.print("--base-conf must be below --detect-conf")
+            return 1
         base_config = merge_overrides(
-            load_config(), imgsz=args.base_imgsz, max_box_frac=args.base_max_box_frac
+            load_config(),
+            imgsz=args.base_imgsz,
+            conf=args.base_conf,
+            max_box_frac=args.base_max_box_frac,
         )
         dense_config = merge_overrides(load_config(), **_DENSE_PRESET)
     except ConfigError as exc:
@@ -280,8 +309,8 @@ def _pipeline_command(args: argparse.Namespace) -> int:
 
     console.print(f"[dim]Model:[/] {weights}")
     console.print(
-        f"[dim]Pipeline:[/] base pass over all frames, then dense + thorough on frames "
-        f"with >= {args.min_count} fish."
+        "[dim]Pipeline (detection first):[/] flag every frame with a fish, then count "
+        f"the flagged frames (>= {args.min_count} detection(s) at >= {args.detect_conf})."
     )
     try:
         summary = run_pipeline(
@@ -291,6 +320,8 @@ def _pipeline_command(args: argparse.Namespace) -> int:
             dense_config=dense_config,
             make_detector=make_detector,
             min_count=args.min_count,
+            detect_conf=args.detect_conf,
+            count_possible=args.count_possible,
             write_images=not args.no_images,
             model_path=weights,
         )
@@ -322,40 +353,67 @@ def _print_summary(console: Console, summary: BatchSummary, *, wrote_images: boo
 
 
 def _print_pipeline_summary(console: Console, summary: PipelineSummary) -> None:
-    table = Table(title="fishcount pipeline", show_header=True, title_justify="left")
-    table.add_column("Stage", style="dim")
-    table.add_column("Frames", justify="right")
-    table.add_column("Total fish", justify="right")
-    table.add_column("Time", justify="right")
-    table.add_row(
-        "base (all frames)",
+    # Detection first: which frames have fish is the headline; counts come after.
+    total = summary.base.processed
+    detect = Table(title="fishcount pipeline: detection", show_header=True, title_justify="left")
+    detect.add_column("Tier", style="dim")
+    detect.add_column("Frames", justify="right")
+    detect.add_column("Meaning")
+    detect.add_row(
+        "confident",
+        f"[bold green]{summary.tier_count('confident')}[/]",
+        "2+ real detections, or one at >= 0.50",
+    )
+    detect.add_row(
+        "review",
+        f"[bold yellow]{summary.tier_count('review')}[/]",
+        "one moderate detection; glance to rule out surface ripple",
+    )
+    detect.add_row(
+        "possible",
+        str(summary.tier_count("possible")),
+        "weak detections only (below --detect-conf)",
+    )
+    detect.add_row("none", str(summary.tier_count("none")), "no detection at all")
+    console.print(detect)
+    console.print(
+        f"[bold]Frames with fish: {summary.flagged} of {total}[/] "
+        f"(counted {summary.counted}; base gate {summary.base.seconds:.0f} s)"
+    )
+
+    counts = Table(title="counts (flagged frames)", show_header=True, title_justify="left")
+    counts.add_column("Stage", style="dim")
+    counts.add_column("Frames", justify="right")
+    counts.add_column("Total fish", justify="right")
+    counts.add_column("Time", justify="right")
+    counts.add_row(
+        "base gate",
         str(summary.base.processed),
         f"{summary.base.total_fish}",
         f"{summary.base.seconds:.0f} s",
     )
-    label = f"dense (>= {summary.min_count} fish)"
     if summary.dense is not None:
-        table.add_row(
-            label,
+        counts.add_row(
+            "dense",
             str(summary.dense.processed),
             f"[bold green]{summary.dense.total_fish}[/]",
             f"{summary.dense.seconds:.0f} s",
         )
     if summary.thorough is not None:
-        table.add_row(
-            "thorough (same frames)",
+        counts.add_row(
+            "thorough",
             str(summary.thorough.processed),
             f"[bold green]{summary.thorough.total_fish}[/]",
             f"{summary.thorough.seconds:.0f} s",
         )
-    console.print(table)
-    if summary.subset_size == 0:
+    console.print(counts)
+    if summary.counted == 0:
         console.print(
-            f"[yellow]No frame reached {summary.min_count} fish in the base pass; "
-            "dense and thorough were skipped.[/]"
+            "[yellow]No frame qualified for counting; dense and thorough were skipped.[/]"
         )
-    console.print(f"[dim]Output:[/] {summary.out_dir}")
-    console.print(f"[dim]Comparison:[/] {summary.out_dir / 'summary.csv'}")
+    console.print(f"[dim]Detections:[/] {summary.out_dir / 'detections.csv'}")
+    console.print(f"[dim]Flagged frames:[/] {summary.out_dir / 'detected'}")
+    console.print(f"[dim]Counts:[/] {summary.out_dir / 'summary.csv'}")
 
 
 def _open_folder(path: Path) -> None:

@@ -13,7 +13,19 @@ def _read(path: Path) -> dict[str, list[str]]:
     return {"header": rows[0], "rows": rows[1:]}
 
 
-def test_pipeline_reruns_only_frames_with_enough_fish(tmp_path: Path) -> None:
+def _factory(base: FakeDetector, dense: FakeDetector, thorough: FakeDetector) -> object:
+    calls = {"plain": 0}
+
+    def make_detector(config: AppConfig, thorough_flag: bool) -> Detector:
+        if thorough_flag:
+            return thorough
+        calls["plain"] += 1
+        return base if calls["plain"] == 1 else dense
+
+    return make_detector
+
+
+def test_pipeline_counts_only_frames_with_enough_detections(tmp_path: Path) -> None:
     folder = tmp_path / "dive"
     for name in ("a.jpg", "b.jpg", "c.jpg"):
         write_image(folder / name)  # sorted order: a, b, c
@@ -23,28 +35,21 @@ def test_pipeline_reruns_only_frames_with_enough_fish(tmp_path: Path) -> None:
     # dense/thorough are only fed the 2 selected frames, so 2-length scripts.
     dense = FakeDetector([[fish()] * 5, [fish()] * 6])
     thorough = FakeDetector([[fish()] * 9, [fish()] * 10])
-    calls = {"non_thorough": 0}
-
-    def make_detector(config: AppConfig, thorough_flag: bool) -> Detector:
-        if thorough_flag:
-            return thorough
-        key = calls["non_thorough"]
-        calls["non_thorough"] += 1
-        return base if key == 0 else dense
 
     out = tmp_path / "out"
     summary = run_pipeline(
         folder,
         out,
-        base_config=AppConfig(),
+        base_config=AppConfig(conf=0.10),
         dense_config=AppConfig(conf=0.10),
-        make_detector=make_detector,
+        make_detector=_factory(base, dense, thorough),  # type: ignore[arg-type]
         min_count=2,
         show_progress=False,
     )
 
     assert summary.base.processed == 3
-    assert summary.subset_size == 2
+    assert summary.flagged == 2
+    assert summary.counted == 2
     assert summary.dense is not None and summary.dense.processed == 2
     assert summary.thorough is not None and summary.thorough.processed == 2
 
@@ -52,40 +57,125 @@ def test_pipeline_reruns_only_frames_with_enough_fish(tmp_path: Path) -> None:
     dense_rows = {r[0] for r in _read(out / "dense" / "counts.csv")["rows"]}
     assert dense_rows == {"a.jpg", "c.jpg", "TOTAL"}
 
-    # summary.csv lines up base/dense/thorough per selected frame.
+    # summary.csv lines up tier + base/dense/thorough per counted frame.
     summ = _read(out / "summary.csv")
-    assert summ["header"] == ["filename", "base_count", "dense_count", "thorough_count"]
+    assert summ["header"] == ["filename", "tier", "base_count", "dense_count", "thorough_count"]
     body = {r[0]: r[1:] for r in summ["rows"]}
-    assert body["a.jpg"] == ["2", "5", "9"]
-    assert body["c.jpg"] == ["3", "6", "10"]
-    assert body["TOTAL"] == ["5", "11", "19"]
+    assert body["a.jpg"] == ["confident", "2", "5", "9"]
+    assert body["c.jpg"] == ["confident", "3", "6", "10"]
+    assert body["TOTAL"] == ["", "5", "11", "19"]
 
 
-def test_pipeline_skips_dense_when_nothing_qualifies(tmp_path: Path) -> None:
+def test_detections_csv_and_detected_folders_are_the_headline_output(tmp_path: Path) -> None:
     folder = tmp_path / "dive"
-    write_image(folder / "a.jpg")
-    write_image(folder / "b.jpg")
-    base = FakeDetector([[fish()], []])  # a=1, b=0; nothing reaches min_count=2
-
-    def make_detector(config: AppConfig, thorough_flag: bool) -> Detector:
-        return base
+    for name in ("conf.jpg", "many.jpg", "review.jpg", "weak.jpg", "empty.jpg"):
+        write_image(folder / name)
+    # sorted order: conf, empty, many, review, weak
+    base = FakeDetector(
+        [
+            [fish(conf=0.9)],  # conf.jpg: one strong detection -> confident
+            [],  # empty.jpg -> none
+            [fish(conf=0.3), fish(conf=0.3)],  # many.jpg: 2 real detections -> confident
+            [fish(conf=0.3)],  # review.jpg: one moderate detection -> review
+            [fish(conf=0.15)],  # weak.jpg: only a weak detection -> possible
+        ]
+    )
+    dense = FakeDetector()
+    thorough = FakeDetector()
 
     out = tmp_path / "out"
     summary = run_pipeline(
         folder,
         out,
-        base_config=AppConfig(),
-        dense_config=AppConfig(),
-        make_detector=make_detector,
-        min_count=2,
+        base_config=AppConfig(conf=0.10),
+        dense_config=AppConfig(conf=0.10),
+        make_detector=_factory(base, dense, thorough),  # type: ignore[arg-type]
+        min_count=1,
+        detect_conf=0.25,
         show_progress=False,
     )
 
-    assert summary.subset_size == 0
+    tiers = {f.file: f.tier for f in summary.frames}
+    assert tiers == {
+        "conf.jpg": "confident",
+        "many.jpg": "confident",
+        "review.jpg": "review",
+        "weak.jpg": "possible",
+        "empty.jpg": "none",
+    }
+    assert summary.flagged == 4  # everything with any detection is flagged
+    # Default counting = frames with >= 1 real detection; the weak-only frame is not counted.
+    assert summary.counted == 3
+    assert summary.dense is not None and summary.dense.processed == 3
+
+    det = _read(out / "detections.csv")
+    assert det["header"] == ["filename", "has_fish", "tier", "max_confidence", "detections", "weak"]
+    by_file = {r[0]: r[1:] for r in det["rows"]}
+    assert by_file["conf.jpg"] == ["yes", "confident", "0.900", "1", "0"]
+    assert by_file["review.jpg"] == ["yes", "review", "0.300", "1", "0"]
+    assert by_file["weak.jpg"] == ["yes", "possible", "0.150", "0", "1"]
+    assert by_file["empty.jpg"] == ["no", "none", "0.000", "0", "0"]
+    # flagged frames sort first, confident before review before possible before none
+    assert [r[0] for r in det["rows"]] == [
+        "conf.jpg",
+        "many.jpg",
+        "review.jpg",
+        "weak.jpg",
+        "empty.jpg",
+    ]
+
+    # detected/<tier>/ holds annotated copies of exactly the flagged frames
+    assert (out / "detected" / "confident" / "conf.jpg").is_file()
+    assert (out / "detected" / "confident" / "many.jpg").is_file()
+    assert (out / "detected" / "review" / "review.jpg").is_file()
+    assert (out / "detected" / "possible" / "weak.jpg").is_file()
+    assert not (out / "detected" / "none").exists()
+
+
+def test_count_possible_includes_weak_only_frames(tmp_path: Path) -> None:
+    folder = tmp_path / "dive"
+    write_image(folder / "weak.jpg")
+    base = FakeDetector([[fish(conf=0.15)]])
+    dense = FakeDetector([[fish()] * 3])
+    thorough = FakeDetector([[fish()] * 4])
+
+    out = tmp_path / "out"
+    summary = run_pipeline(
+        folder,
+        out,
+        base_config=AppConfig(conf=0.10),
+        dense_config=AppConfig(conf=0.10),
+        make_detector=_factory(base, dense, thorough),  # type: ignore[arg-type]
+        count_possible=True,
+        show_progress=False,
+    )
+
+    assert summary.tier_count("possible") == 1
+    assert summary.counted == 1
+    assert summary.dense is not None and summary.dense.total_fish == 3
+
+
+def test_pipeline_skips_counting_when_nothing_qualifies(tmp_path: Path) -> None:
+    folder = tmp_path / "dive"
+    write_image(folder / "a.jpg")
+    write_image(folder / "b.jpg")
+    base = FakeDetector([[fish(conf=0.15)], []])  # weak-only and empty; nothing to count
+
+    out = tmp_path / "out"
+    summary = run_pipeline(
+        folder,
+        out,
+        base_config=AppConfig(conf=0.10),
+        dense_config=AppConfig(conf=0.10),
+        make_detector=lambda config, thorough_flag: base,
+        show_progress=False,
+    )
+
+    assert summary.flagged == 1  # the weak frame is still flagged as possible
+    assert summary.counted == 0
     assert summary.dense is None
     assert summary.thorough is None
     assert not (out / "dense").exists()
-    assert (out / "base" / "counts.csv").is_file()
-    # summary.csv exists with only the TOTAL row (zeros).
+    assert (out / "detections.csv").is_file()
     rows = _read(out / "summary.csv")["rows"]
-    assert rows == [["TOTAL", "0", "0", "0"]]
+    assert rows == [["TOTAL", "", "0", "0", "0"]]
