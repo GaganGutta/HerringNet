@@ -153,6 +153,15 @@ def build_parser() -> argparse.ArgumentParser:
         "Detections between --base-conf and this are tiered 'possible'.",
     )
     pipeline.add_argument(
+        "--static-min-frames",
+        type=int,
+        default=8,
+        dest="static_min_frames",
+        help="A box that recurs at the same pixels in this many distinct frames is a "
+        "stationary object (rock/debris), not a fish; it is demoted to the 'static' "
+        "tier (default 8). 0 disables the filter.",
+    )
+    pipeline.add_argument(
         "--count-possible",
         action="store_true",
         dest="count_possible",
@@ -322,6 +331,7 @@ def _pipeline_command(args: argparse.Namespace) -> int:
             min_count=args.min_count,
             detect_conf=args.detect_conf,
             count_possible=args.count_possible,
+            static_min_frames=args.static_min_frames or None,
             write_images=not args.no_images,
             model_path=weights,
         )
@@ -373,6 +383,11 @@ def _print_pipeline_summary(console: Console, summary: PipelineSummary) -> None:
         "possible",
         str(summary.tier_count("possible")),
         "weak detections only (below --detect-conf)",
+    )
+    detect.add_row(
+        "static",
+        str(summary.tier_count("static")),
+        "only stationary objects (same box across many frames): not fish",
     )
     detect.add_row("none", str(summary.tier_count("none")), "no detection at all")
     console.print(detect)

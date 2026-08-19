@@ -144,13 +144,24 @@ fish, while real fish are under 5% of the frame). Every frame then gets a tier:
 | `confident` | 2+ detections at >= `--detect-conf` (0.25), or any at >= 0.50 | yes |
 | `review` | exactly one moderate detection (0.25-0.50): a lone distant fish or surface ripple, glance to decide | yes |
 | `possible` | only weak detections (0.10-0.25) | no (`--count-possible` to include) |
+| `static` | only stationary objects (see below): not fish, kept for audit | no |
 | `none` | nothing | no |
 
 `--min-count N` sets how many real detections a frame needs to be counted
 (default 1). `--base-imgsz` (default 1536) is the gate resolution; 1024 misses
 dense schools entirely.
 
-Two false-positive types to know about. The size filter removes *oversized*
+**Stationary objects.** A fixed camera re-detects the same rock, shell, or
+patch of debris at the same pixels in frame after frame, often at 0.5-0.7
+confidence, and on one 999-frame set that alone flagged ~270 frames. Fish move.
+So a box that recurs (IoU >= 0.3) in `--static-min-frames` distinct frames
+(default 8) is demoted to the `static` tier and copied to `detected\static\`,
+never deleted, so you can check the filter is not eating a fish that holds
+still. `--static-min-frames 0` disables it. Verified by hand on that set: every
+demoted box inspected was a rock or a night-time light streak, and moving fish
+stayed flagged.
+
+Three false-positive types to know about. The size filter removes *oversized*
 boxes (empty water read as one big fish). It cannot remove *small* boxes on
 water-surface ripple/caustic texture, which look like a distant fish and are
 genuinely ambiguous. Those land in `review`, so with a folder of hundreds of

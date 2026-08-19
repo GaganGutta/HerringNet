@@ -13,6 +13,9 @@ frames by how sure it is, instead of thresholding them away.
                moderate box; genuinely ambiguous between a distant fish and
                water-surface ripple, so worth a human glance)
     possible   only weak detections (below detect_conf, above the gate floor)
+    static     only stationary objects (rocks/debris re-detected at the same
+               pixels across many frames; see fishcount.sequence). Not fish,
+               but kept visible instead of deleted.
     none       nothing at all
 
 Outputs, in priority order:
@@ -34,6 +37,7 @@ from fishcount.batch import BatchSummary, run_batch
 from fishcount.config import AppConfig
 from fishcount.count import TOTAL_ROW_LABEL
 from fishcount.detector import Detector
+from fishcount.sequence import StaticMask, static_detections
 
 # Builds a detector for a stage: (config, thorough) -> Detector.
 DetectorFactory = Callable[[AppConfig, bool], Detector]
@@ -42,7 +46,7 @@ DetectorFactory = Callable[[AppConfig, bool], Detector]
 # confident on its own.
 CONFIDENT_CONF = 0.50
 
-TIERS = ("confident", "review", "possible", "none")
+TIERS = ("confident", "review", "possible", "static", "none")
 
 
 @dataclass(slots=True)
@@ -54,10 +58,11 @@ class FrameDetection:
     n_weak: int  # detections below detect_conf but above the gate floor
     max_conf: float
     tier: str
+    n_static: int = 0  # stationary-object detections ignored by the tiering
 
     @property
     def has_fish(self) -> bool:
-        return self.tier != "none"
+        return self.tier not in ("none", "static")
 
 
 @dataclass(slots=True)
@@ -88,6 +93,7 @@ def run_pipeline(
     min_count: int = 1,
     detect_conf: float = 0.25,
     count_possible: bool = False,
+    static_min_frames: int | None = 8,
     write_images: bool = True,
     show_progress: bool = True,
     model_path: Path | None = None,
@@ -98,6 +104,8 @@ def run_pipeline(
     the dense and thorough passes; `count_possible=True` also counts the
     possible tier. `base_config.conf` is the gate floor and should sit below
     `detect_conf` so weak detections are recorded rather than lost.
+    `static_min_frames` demotes stationary objects (a box recurring in that
+    many distinct frames) to the static tier; None disables the filter.
     """
     base_dir = out_dir / "base"
     base_summary = run_batch(
@@ -110,7 +118,10 @@ def run_pipeline(
         model_path=model_path,
     )
 
-    frames = tier_frames(base_dir / "results.json", detect_conf=detect_conf)
+    static: StaticMask = set()
+    if static_min_frames is not None:
+        static = static_detections(base_dir / "results.json", min_frames=static_min_frames)
+    frames = tier_frames(base_dir / "results.json", detect_conf=detect_conf, static=static)
     write_detections_csv(frames, out_dir / "detections.csv")
     if write_images:
         _copy_flagged(frames, base_dir / "annotated", out_dir / "detected")
@@ -158,30 +169,45 @@ def run_pipeline(
     )
 
 
-def tier_frames(results_json: Path, *, detect_conf: float) -> list[FrameDetection]:
-    """Tier every frame in a stage's results.json by what the gate saw."""
+def tier_frames(
+    results_json: Path, *, detect_conf: float, static: StaticMask | None = None
+) -> list[FrameDetection]:
+    """Tier every frame in a stage's results.json by what the gate saw.
+
+    Detections listed in `static` are stationary objects and are excluded from
+    the tiering; a frame with only static detections gets the "static" tier.
+    """
+    static = static or set()
     payload = json.loads(results_json.read_text(encoding="utf-8"))
     frames: list[FrameDetection] = []
-    for image in payload["images"]:
+    for frame_index, image in enumerate(payload["images"]):
         if "error" in image:
             frames.append(FrameDetection(image["file"], 0, 0, 0.0, "none"))
             continue
-        confs = [float(det["confidence"]) for det in image.get("detections", [])]
+        confs: list[float] = []
+        n_static = 0
+        for det_index, det in enumerate(image.get("detections", [])):
+            if (frame_index, det_index) in static:
+                n_static += 1
+            else:
+                confs.append(float(det["confidence"]))
         n_detect = sum(1 for conf in confs if conf >= detect_conf)
         n_weak = len(confs) - n_detect
         max_conf = max(confs, default=0.0)
-        tier = _tier(n_detect, n_weak, max_conf)
-        frames.append(FrameDetection(image["file"], n_detect, n_weak, max_conf, tier))
+        tier = _tier(n_detect, n_weak, max_conf, n_static)
+        frames.append(FrameDetection(image["file"], n_detect, n_weak, max_conf, tier, n_static))
     return frames
 
 
-def _tier(n_detect: int, n_weak: int, max_conf: float) -> str:
+def _tier(n_detect: int, n_weak: int, max_conf: float, n_static: int = 0) -> str:
     if n_detect >= 2 or max_conf >= CONFIDENT_CONF:
         return "confident"
     if n_detect == 1:
         return "review"
     if n_weak >= 1:
         return "possible"
+    if n_static >= 1:
+        return "static"
     return "none"
 
 
@@ -191,7 +217,9 @@ def write_detections_csv(frames: list[FrameDetection], path: Path) -> None:
     ordered = sorted(frames, key=lambda frame: (order[frame.tier], frame.file))
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["filename", "has_fish", "tier", "max_confidence", "detections", "weak"])
+        writer.writerow(
+            ["filename", "has_fish", "tier", "max_confidence", "detections", "weak", "static"]
+        )
         for frame in ordered:
             writer.writerow(
                 [
@@ -201,14 +229,19 @@ def write_detections_csv(frames: list[FrameDetection], path: Path) -> None:
                     f"{frame.max_conf:.3f}",
                     frame.n_detect,
                     frame.n_weak,
+                    frame.n_static,
                 ]
             )
 
 
 def _copy_flagged(frames: list[FrameDetection], annotated_dir: Path, detected_dir: Path) -> None:
-    """Copy each flagged frame's annotated image into detected/<tier>/."""
+    """Copy each flagged frame's annotated image into detected/<tier>/.
+
+    Static-only frames are copied too (detected/static/) so the stationary
+    object filter can be audited; they are not counted as fish.
+    """
     for frame in frames:
-        if not frame.has_fish:
+        if frame.tier == "none":
             continue
         source = annotated_dir / frame.file
         if not source.is_file():

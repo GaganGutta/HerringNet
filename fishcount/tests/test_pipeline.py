@@ -109,12 +109,20 @@ def test_detections_csv_and_detected_folders_are_the_headline_output(tmp_path: P
     assert summary.dense is not None and summary.dense.processed == 3
 
     det = _read(out / "detections.csv")
-    assert det["header"] == ["filename", "has_fish", "tier", "max_confidence", "detections", "weak"]
+    assert det["header"] == [
+        "filename",
+        "has_fish",
+        "tier",
+        "max_confidence",
+        "detections",
+        "weak",
+        "static",
+    ]
     by_file = {r[0]: r[1:] for r in det["rows"]}
-    assert by_file["conf.jpg"] == ["yes", "confident", "0.900", "1", "0"]
-    assert by_file["review.jpg"] == ["yes", "review", "0.300", "1", "0"]
-    assert by_file["weak.jpg"] == ["yes", "possible", "0.150", "0", "1"]
-    assert by_file["empty.jpg"] == ["no", "none", "0.000", "0", "0"]
+    assert by_file["conf.jpg"] == ["yes", "confident", "0.900", "1", "0", "0"]
+    assert by_file["review.jpg"] == ["yes", "review", "0.300", "1", "0", "0"]
+    assert by_file["weak.jpg"] == ["yes", "possible", "0.150", "0", "1", "0"]
+    assert by_file["empty.jpg"] == ["no", "none", "0.000", "0", "0", "0"]
     # flagged frames sort first, confident before review before possible before none
     assert [r[0] for r in det["rows"]] == [
         "conf.jpg",
@@ -179,3 +187,65 @@ def test_pipeline_skips_counting_when_nothing_qualifies(tmp_path: Path) -> None:
     assert (out / "detections.csv").is_file()
     rows = _read(out / "summary.csv")["rows"]
     assert rows == [["TOTAL", "", "0", "0", "0"]]
+
+
+def test_static_objects_are_demoted_not_dropped(tmp_path: Path) -> None:
+    folder = tmp_path / "dive"
+    names = [f"f{i:02d}.jpg" for i in range(10)]
+    for name in names:
+        write_image(folder / name, width=200, height=200)
+    # A "rock": the identical confident box in every one of the 10 frames.
+    rock = fish(50, 50, 70, 70, conf=0.6)
+    # A real fish moves: it appears at different places in two frames only.
+    moving_a = fish(120, 120, 150, 140, conf=0.9)
+    moving_b = fish(20, 150, 50, 170, conf=0.9)
+    script = [[rock] for _ in names]
+    script[3] = [rock, moving_a]
+    script[7] = [rock, moving_b]
+    base = FakeDetector(script)
+
+    out = tmp_path / "out"
+    summary = run_pipeline(
+        folder,
+        out,
+        base_config=AppConfig(conf=0.10),
+        dense_config=AppConfig(conf=0.10),
+        make_detector=lambda config, thorough_flag: base,
+        static_min_frames=8,
+        show_progress=False,
+    )
+
+    tiers = {f.file: f.tier for f in summary.frames}
+    # Only the two frames with a moving fish are flagged; the rock frames are static.
+    assert tiers["f03.jpg"] == "confident"
+    assert tiers["f07.jpg"] == "confident"
+    assert sum(1 for t in tiers.values() if t == "static") == 8
+    assert summary.flagged == 2
+    # The rock is still recorded, just not counted as a fish.
+    assert all(f.n_static == 1 for f in summary.frames)
+    assert (out / "detected" / "static" / "f00.jpg").is_file()
+    assert (out / "detected" / "confident" / "f03.jpg").is_file()
+    det = _read(out / "detections.csv")
+    assert det["header"][-1] == "static"
+    row = {r[0]: r for r in det["rows"]}["f00.jpg"]
+    assert row[1:3] == ["no", "static"]
+
+
+def test_static_filter_can_be_disabled(tmp_path: Path) -> None:
+    folder = tmp_path / "dive"
+    names = [f"f{i:02d}.jpg" for i in range(10)]
+    for name in names:
+        write_image(folder / name, width=200, height=200)
+    base = FakeDetector([[fish(50, 50, 70, 70, conf=0.6)] for _ in names])
+
+    summary = run_pipeline(
+        folder,
+        tmp_path / "out",
+        base_config=AppConfig(conf=0.10),
+        dense_config=AppConfig(conf=0.10),
+        make_detector=lambda config, thorough_flag: base,
+        static_min_frames=None,
+        show_progress=False,
+    )
+    assert summary.tier_count("static") == 0
+    assert summary.flagged == 10
