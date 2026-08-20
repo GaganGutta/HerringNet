@@ -13,10 +13,11 @@ def test_annotate_returns_marked_copy_and_leaves_input_untouched() -> None:
     assert out is not image
     assert np.array_equal(image, before)
     assert out.shape == image.shape
-    assert out.any()  # something was drawn
+    assert out.any()  # a box was drawn
 
 
-def test_annotate_draws_banner_even_with_zero_fish() -> None:
+def test_annotate_with_no_detections_is_a_plain_copy() -> None:
     image = np.zeros((120, 160, 3), dtype=np.uint8)
     out = annotate(image, [])
-    assert out.any()
+    assert out is not image
+    assert not out.any()  # no banner, no boxes, nothing drawn

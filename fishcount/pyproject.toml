@@ -16,7 +16,6 @@ dependencies = [
     "opencv-python>=4.8",
     "numpy>=1.24",
     "Pillow>=10.0",
-    "pandas>=2.0",
     "tqdm>=4.66",
     "rich>=13.0",
     "PyYAML>=6.0",
@@ -24,12 +23,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-thorough = ["sahi>=0.11.20"]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
     "mypy>=1.10",
-    "pandas-stubs",
     "types-PyYAML",
     "types-tqdm",
 ]
@@ -63,6 +60,6 @@ warn_return_any = true
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
-module = ["ultralytics.*", "sahi.*", "cv2.*", "cv2"]
+module = ["ultralytics.*", "cv2.*", "cv2"]
 ignore_missing_imports = true
 follow_imports = "skip"

@@ -12,17 +12,15 @@ because a small rock's box jitters by tens of pixels between frames; on the
 first 999-frame set, 0.3 caught the jittering pebbles that 0.5 missed while
 every additionally demoted box inspected by hand was still a rock, and the
 moving fish stayed flagged.
-The pipeline demotes static-only frames to their own tier rather than
-deleting anything, so the decision stays auditable.
-
-This module is also the natural home for the Phase 2 sequence-aware counting
-(tracking / frame-residence correction) when that lands.
+Classification demotes static-only frames rather than deleting anything, so
+the decision stays auditable. Known limitation: a fish holding station at the
+same spot for min_frames distinct frames is demoted like a rock (demote-only,
+so it stays visible in not_confident).
 """
 
 from __future__ import annotations
 
 import json
-from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -57,17 +55,6 @@ def static_detections(results_json: Path, *, min_frames: int = 8, iou: float = 0
         if distinct_frames >= min_frames:
             static.add((frame_index, det_index))
     return static
-
-
-def static_frame_counts(mask: StaticMask, n_frames: int) -> list[int]:
-    """How many static detections each frame has, indexed by frame order."""
-    counts = [0] * n_frames
-    per_frame: dict[int, int] = defaultdict(int)
-    for frame_index, _ in mask:
-        per_frame[frame_index] += 1
-    for frame_index, count in per_frame.items():
-        counts[frame_index] = count
-    return counts
 
 
 def _pairwise_iou(boxes: np.ndarray) -> np.ndarray:

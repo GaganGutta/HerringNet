@@ -1,9 +1,9 @@
-"""Model loading and inference: the only module that talks to detector backends.
+"""Model loading and inference: the only module that talks to the detector.
 
-Counting lives in fishcount.count. Keeping detection behind the small Detector
-protocol is what lets Phase 2 (sequence-aware counting for video frames) land
-without touching inference, and lets tests substitute a scripted fake detector
-that needs no model weights.
+Detection is the product. The detector runs one full-frame pass per image at a
+recall-first operating point (imgsz 1536, confidence floor 0.10, IoU 0.7,
+max_det 3000); everything above the floor is recorded and later tiered by
+fishcount.classify, never silently dropped.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-import cv2
 import numpy as np
 from numpy.typing import NDArray
 
@@ -30,7 +29,7 @@ class ModelNotFoundError(FileNotFoundError):
 
 @dataclass(frozen=True, slots=True)
 class Detection:
-    """One detected fish, as pixel coordinates on the original image."""
+    """One detection, as pixel coordinates on the original image."""
 
     x1: float
     y1: float
@@ -44,7 +43,7 @@ class Detection:
 
 
 class Detector(Protocol):
-    """Anything that turns a batch of BGR images into per-image fish detections."""
+    """Anything that turns a batch of BGR images into per-image detections."""
 
     def detect_batch(self, images: Sequence[ImageArray]) -> list[list[Detection]]:
         """Return one list of detections per input image, in input order."""
@@ -98,7 +97,7 @@ class YoloDetector:
         self._max_det = config.max_det
 
     def detect_batch(self, images: Sequence[ImageArray]) -> list[list[Detection]]:
-        """One forward pass over the whole batch. Every detection is a fish."""
+        """One forward pass over the whole batch."""
         if not images:
             return []
         outputs = self._model.predict(
@@ -112,63 +111,8 @@ class YoloDetector:
         return [_to_detections(output) for output in outputs]
 
 
-class SahiDetector:
-    """Sliced (tiled) inference via SAHI, to catch very small fish. Much slower.
-
-    SAHI processes one image at a time; the Detector interface stays batched so
-    the pipeline does not care which backend it got.
-    """
-
-    def __init__(self, weights: Path, config: AppConfig) -> None:
-        if not weights.is_file():
-            raise ModelNotFoundError(_missing_message([weights]))
-        try:
-            from sahi import AutoDetectionModel
-            from sahi.predict import get_sliced_prediction
-        except ImportError as exc:
-            raise RuntimeError(
-                "--thorough needs the optional sahi package. "
-                'Install it with: pip install -e ".[thorough]"'
-            ) from exc
-        self._sliced_prediction = get_sliced_prediction
-        self._model = AutoDetectionModel.from_pretrained(
-            model_type="ultralytics",
-            model_path=str(weights),
-            confidence_threshold=config.conf,
-            device="cpu",
-            image_size=config.slice_size,
-        )
-        self._slice = config.slice_size
-        self._overlap = config.overlap_ratio
-
-    def detect_batch(self, images: Sequence[ImageArray]) -> list[list[Detection]]:
-        results: list[list[Detection]] = []
-        for image in images:
-            prediction = self._sliced_prediction(
-                cv2.cvtColor(image, cv2.COLOR_BGR2RGB),
-                self._model,
-                slice_height=self._slice,
-                slice_width=self._slice,
-                overlap_height_ratio=self._overlap,
-                overlap_width_ratio=self._overlap,
-                perform_standard_pred=True,
-                postprocess_class_agnostic=True,
-                verbose=0,
-            )
-            detections: list[Detection] = []
-            for obj in prediction.object_prediction_list:
-                x1, y1, x2, y2 = obj.bbox.to_xyxy()
-                detections.append(
-                    Detection(float(x1), float(y1), float(x2), float(y2), float(obj.score.value))
-                )
-            results.append(detections)
-        return results
-
-
-def create_detector(weights: Path, config: AppConfig, *, thorough: bool = False) -> Detector:
-    """Build the configured detector; thorough=True swaps in SAHI tiling."""
-    if thorough:
-        return SahiDetector(weights, config)
+def create_detector(weights: Path, config: AppConfig) -> Detector:
+    """Build the detector for a run."""
     return YoloDetector(weights, config)
 
 

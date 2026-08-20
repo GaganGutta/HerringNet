@@ -8,13 +8,11 @@ from fishcount.config import AppConfig, ConfigError, load_config, merge_override
 def test_defaults_when_no_config_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     config = load_config()
-    assert config.conf == 0.25
+    assert config.conf == 0.10
     assert config.iou == 0.7
-    assert config.imgsz == 1024
+    assert config.imgsz == 1536
     assert config.batch_size == 8
-    assert config.max_det == 1000
-    assert config.slice_size == 640
-    assert config.overlap_ratio == 0.2
+    assert config.max_det == 3000
     assert config.model_path == Path("models") / "cfd-yolov12x.pt"
 
 

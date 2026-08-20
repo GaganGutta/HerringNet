@@ -1,13 +1,14 @@
 # fishcount
 
-Count fish in a folder of images, fully offline on a Windows laptop CPU. Put a
-folder in, run one command (or drag the folder onto a .bat file), get annotated
-images and a fish-count file out. No database, no server, no cloud.
+Detect fish in a folder of images, fully offline on a Windows laptop CPU. Put a
+folder in, run one command (or drag the folder onto a .bat file), get every
+frame that holds a fish, tiered by confidence. No database, no server, no
+cloud, and **no counting**: this tool reports detections, not fish counts.
 
 Detection uses the Community Fish Detector (`cfd-yolov12x.pt`): a YOLOv12x
-object detector with a single class (`fish`), trained at image size 1024.
-Every detection is "fish"; there is no species classification. Input images are
-never modified; all output goes to a separate folder.
+object detector with a single class (`fish`). Every detection is "fish"; there
+is no species classification. Input images are never modified; all output goes
+to a separate folder.
 
 ## Setup (once)
 
@@ -28,188 +29,114 @@ never modified; all output goes to a separate folder.
 
 ## Use it
 
-### Drag and drop (Windows)
-
-Drag any folder of images onto **Detect Folder.bat**. A console window shows
-progress and the summary, then the results folder opens. Results land in
-`output\<your folder name>\` inside this project folder.
-
-### Command line
+Drag any folder of images onto **Detect Folder.bat**, or run:
 
 ```
 fishcount detect "C:\path\to\your images"
 ```
 
-Subfolders are included. Outputs go to `output\<folder name>\` under your
-current directory (change with `--out`):
+One inference pass per image (imgsz 1536, confidence floor 0.10, IoU 0.7,
+max_det 3000), then every frame is tiered. Output goes to `output\<name>\`:
 
 ```
-output\dive1\
-  annotated\     every image with green boxes and a "Fish: N" overlay
-  counts.csv     one row per image (filename, fish_count) + a TOTAL row
-  results.json   per image: boxes [x1, y1, x2, y2] in pixels + confidence
+output\120GOPRO\
+  confident.csv        detections in frames that almost certainly hold fish
+  under_review.csv     detections worth a human glance
+  not_confident.csv    weak / static / oversized detections, quarantined
+  confident\           annotated images for each tier (review is visual)
+  under_review\
+  not_confident\
+  results.json         the raw record: every detection + per-frame blur score
 ```
 
-### Flags
+Each CSV row is one detection: `filename, x1, y1, x2, y2, confidence, note,
+frame_blurry`. All of a frame's detections land in its frame's tier file.
+Frames with no detections at all appear in no file.
+
+## How tiering works (detection-first)
+
+The rule is **demote, never delete**: nothing above the confidence floor is
+ever discarded. Three signals demote a detection or cap a frame; all three are
+auditable in the `note` column and the annotated images:
+
+| Signal | What it means | Effect |
+| --- | --- | --- |
+| `static` | the box recurs at the same pixels in `--static-min-frames` (default 8) distinct frames: a rock, shell, or debris, not a fish | does not count as fish evidence |
+| `oversized` | the box covers more than 10% of the frame: murky water misread as one giant fish (real fish here are under 5% of the frame) | routed to review, never confident |
+| blur cap | the frame is blurrier than `--blur-percentile` (default 25) of its own folder | frame tier capped at under_review unless the school exemption applies |
+
+Frame tiers, computed from the non-static, non-oversized detections:
+
+| Tier | Rule |
+| --- | --- |
+| `confident` | 2+ detections at >= 0.25, or any detection at >= 0.50, in a sharp frame |
+| `under_review` | exactly one moderate detection; or confident-level evidence in a blurry frame; or an oversized box at moderate confidence |
+| `not_confident` | only weak (0.10-0.25), static, or weak-oversized detections |
+
+**The blur cap and the school exemption.** Blur is normalized per folder
+(percentile of the run's own distribution) because absolute sharpness tracks
+turbidity and lighting as much as focus, so an absolute cutoff would not
+transfer between sites. A blurry frame cannot reach `confident`, no matter how
+many boxes it has, **unless** it has 4 or more real detections. The exemption
+exists because dense fish schools are blurry (the fish move); note that it was
+fit on six school frames from the 104GOPRO and 120GOPRO deployments and should
+be re-checked on new sites.
+
+## The recall/precision tradeoff, stated plainly
+
+- Recall first: the detector runs at a 0.10 floor and nothing above it is
+  deleted, so anything the model fires on appears in one of the three files.
+  Blur tiering is triage, not a detector fix: it does not stop sediment from
+  firing the model, it keeps those firings out of `confident`.
+- Precision is bought only inside `confident.csv`, by demotion. The cost: a
+  real fish in a blurry frame with thin evidence lands in `under_review`
+  instead of `confident`. It is never lost, but `under_review` is a real part
+  of the workflow, not a dumping ground.
+- Validation to date: on 80 randomly sampled no-detection frames across the
+  two GOPRO deployments, an independent tiled-inference oracle surfaced zero
+  verified fish (every strong hit was hand-checked and was equipment, rock,
+  flare, or murk). Rule-of-three 95% upper bound: under ~4% of no-detection
+  frames could hold an oracle-findable fish.
+
+## Known limitations
+
+- **A fish holding station is demoted like a rock.** The static rule cannot
+  tell a rock from a fish that sits at the same spot in 8+ distinct frames.
+  It only demotes (to `not_confident`, note `static`), so such a fish stays
+  visible and recoverable in review. Lower `--static-min-frames` risk-free is
+  not possible; disabling it (`--static-min-frames 0`) restores those frames
+  at the cost of hundreds of rock frames.
+- The blur percentile always marks the blurriest quarter of any folder as
+  blurry, even in a uniformly sharp deployment; this only matters for frames
+  with thin evidence.
+- The school exemption threshold (4 real detections) is fit on six frames from
+  two deployments at one site type. Re-validate before trusting it elsewhere.
+
+## Flags
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--out DIR` | `output/<folder name>` | Where to write results |
-| `--conf FLOAT` | `0.25` | Confidence threshold (raise to cut false positives) |
-| `--imgsz INT` | `1024` | Inference size; higher finds more small fish, much slower |
+| `--name NAME` / `--out DIR` | input folder's name | where results go under `output\` |
+| `--conf FLOAT` | `0.10` | confidence floor; everything above it is recorded |
+| `--imgsz INT` | `1536` | inference size; 1024 is faster but misses dense schools of small fish |
 | `--iou FLOAT` | `0.7` | NMS IoU; higher keeps tightly packed fish |
-| `--max-det INT` | `1000` | Max detections per image (Ultralytics silently caps at 300 otherwise) |
-| `--batch-size INT` | `8` | Images per model pass; lower it if RAM is tight |
-| `--dense` | off | Recall-first preset for dense schools of small fish (see below) |
-| `--slice-size INT` | `640` | SAHI tile size (`--thorough` only); smaller finds smaller fish |
-| `--overlap FLOAT` | `0.2` | SAHI tile overlap (`--thorough` only) |
-| `--no-images` | off | Counts only, skip writing annotated images |
-| `--thorough` | off | SAHI tiled inference for very small fish (much slower) |
-| `--open` | off | Open the output folder when finished |
+| `--max-det INT` | `3000` | max detections per image |
+| `--batch-size INT` | `8` | images per model pass; lower if RAM is tight |
+| `--blur-percentile FLOAT` | `25` | per-folder blur cutoff; `0` disables the blur cap |
+| `--static-min-frames INT` | `8` | recurrence threshold for stationary objects; `0` disables |
+| `--no-images` | off | CSVs and results.json only |
+| `--open` | off | open the output folder when finished |
 
 Defaults can also be set in [config.yaml](config.yaml). Precedence:
-CLI flags > `--dense` preset > config.yaml > built-in defaults.
-
-## Dense schools of small fish (important)
-
-The default settings are tuned for sparse-to-moderate scenes with clearly
-separated fish. On a **dense school of small fish**, full-frame detection at
-1024 px misses most of them and can report **zero** on a frame that visibly
-holds hundreds, because each fish shrinks to a few pixels after downscaling.
-
-Use `--dense` for these frames. It lowers the confidence threshold, raises the
-inference size, and removes the 300-detection cap. Add `--thorough` to also
-switch to SAHI tiling, which is the strongest recall setting:
-
-```
-fishcount detect "C:\path\to\images" --dense            # much better, still CPU-friendly
-fishcount detect "C:\path\to\images" --dense --thorough # maximum recall, slow
-```
-
-Measured on one laptop CPU, on two 4000x3000 frames that the default run scored
-**0**, plus a moderate frame the default scored 11:
-
-| Setting | dense frame A | dense frame B | moderate frame | speed |
-| --- | --- | --- | --- | --- |
-| default (1024) | 0 | 0 | 11 | ~2 s/img |
-| `--dense` (1536) | 16 | 17 | 33 | ~6 s/img |
-| `--dense --thorough` (tile 640) | ~67 | ~94 | ~87 | ~30-45 s/img |
-
-### The honest ceiling
-
-None of these settings counts a dense school *accurately*. Bounding-box
-detection systematically **undercounts** crowds, and the error grows with
-density: overlapping fish get merged by NMS, few-pixel bodies have no clear
-edges, and a packed 3-D school is under-determined from one 2-D frame. Even the
-strongest setting recovers on the order of dozens-to-low-hundreds from a frame
-that may hold a thousand fry. So:
-
-- For **sparse, separated fish**, treat the count as a real count.
-- For **dense schools**, treat the number as a **relative-abundance index / lower
-  bound**, good for comparing frames, sites, or time points under similar
-  conditions, not for stating an exact population. Validate against hand counts
-  on a few frames before trusting absolute numbers, and note the density band
-  where the tool stays reliable.
-- A truly accurate dense count needs a different method (density-map estimation,
-  or acoustics such as imaging sonar), which is out of scope for this offline
-  box detector.
-
-## Pipeline: detection first, then count
-
-`fishcount pipeline` is the main workflow, and it puts **detection ahead of
-counting**: the goal is to flag every frame that holds a fish (big or small),
-keep false positives quarantined rather than mixed in, and only then count.
-
-```
-fishcount pipeline "C:\path\to\104GOPRO" --name 104GOPROFINAL
-```
-
-Outputs under `output\<name>\`, in priority order:
-
-1. `detections.csv`  one row per frame: `has_fish`, `tier`, `max_confidence`.
-   Fish frames sort first. This is the headline result.
-2. `detected\confident\`, `detected\review\`, `detected\possible\`
-   annotated copies of every flagged frame, by tier, so reviewing means
-   opening a folder.
-3. `base\`, `dense\`, `thorough\` and `summary.csv`: the counts.
-
-**How the gate tiers frames.** The base pass runs at a low confidence floor
-(`--base-conf`, default 0.10; this costs no extra inference time) so nothing
-with a detection is silently dropped, and it discards oversized boxes
-(`--base-max-box-frac`, default 0.10; empty/murky water misread as one giant
-fish, while real fish are under 5% of the frame). Every frame then gets a tier:
-
-| Tier | Meaning | Counted by default |
-| --- | --- | --- |
-| `confident` | 2+ detections at >= `--detect-conf` (0.25), or any at >= 0.50 | yes |
-| `review` | exactly one moderate detection (0.25-0.50): a lone distant fish or surface ripple, glance to decide | yes |
-| `possible` | only weak detections (0.10-0.25) | no (`--count-possible` to include) |
-| `static` | only stationary objects (see below): not fish, kept for audit | no |
-| `none` | nothing | no |
-
-`--min-count N` sets how many real detections a frame needs to be counted
-(default 1). `--base-imgsz` (default 1536) is the gate resolution; 1024 misses
-dense schools entirely.
-
-**Stationary objects.** A fixed camera re-detects the same rock, shell, or
-patch of debris at the same pixels in frame after frame, often at 0.5-0.7
-confidence, and on one 999-frame set that alone flagged ~270 frames. Fish move.
-So a box that recurs (IoU >= 0.3) in `--static-min-frames` distinct frames
-(default 8) is demoted to the `static` tier and copied to `detected\static\`,
-never deleted, so you can check the filter is not eating a fish that holds
-still. `--static-min-frames 0` disables it. Verified by hand on that set: every
-demoted box inspected was a rock or a night-time light streak, and moving fish
-stayed flagged.
-
-Three false-positive types to know about. The size filter removes *oversized*
-boxes (empty water read as one big fish). It cannot remove *small* boxes on
-water-surface ripple/caustic texture, which look like a distant fish and are
-genuinely ambiguous. Those land in `review`, so with a folder of hundreds of
-frames you only eyeball the review tier.
-
-The dense/thorough counts are recall-first; read them as a relative abundance
-index, not exact totals (see the ceiling note above).
+CLI flags > config.yaml > built-in defaults.
 
 ## Speed on CPU
 
-YOLOv12x at image size 1024 is the accurate-but-heavy setting. On a laptop CPU
-expect a few seconds per image. Levers:
-
-- `--imgsz 640` is roughly 2-3x faster, with loss of small-fish recall.
-  `--imgsz 1536/2048` finds more small fish, at ~2.5x / ~4x the cost.
-- `--no-images` skips encoding and writing annotated images.
-- `--batch-size` mostly trades RAM, not speed, on CPU; lower it if memory is tight.
-
-The model is loaded once per run and images are processed in batches, with each
-image read from disk exactly once.
-
-## Thorough mode (very small fish)
-
-```
-pip install -e ".[thorough]"
-fishcount detect "C:\path\to\images" --thorough
-```
-
-Slices each image into overlapping tiles (SAHI, default 640 px via
-`--slice-size`), detects per tile at native resolution, and merges. Catches
-small distant fish that full-frame inference misses, at many times the runtime.
-Smaller tiles find smaller fish. Off by default on purpose; combine with
-`--dense` for the strongest recall on schools.
-
-## Phase 2 design: sequences and video (not built yet)
-
-For image sequences or video frames, summing per-image counts double-counts a
-fish that stays in view across frames. The code is already split so this slots
-in cleanly:
-
-- `fishcount/detector.py` produces per-image detections and will not change.
-- `fishcount/batch.py` already yields results in sorted filename order, which
-  doubles as frame order.
-- `fishcount/count.py` is the only place counts are aggregated. Phase 2 adds a
-  sequence-aware aggregator there: either frame-residence-rate correction
-  (scale raw detections by how long the average fish stays in view) or a
-  lightweight IoU/centroid tracker that counts track births. A future
-  `--sequence` flag will select it.
+One pass at imgsz 1536 costs roughly 6 s per 4000x3000 frame on a laptop CPU
+(batched, model loaded once, each image read from disk exactly once; the blur
+score is computed from the already-decoded image). `--imgsz 1024` is about
+2.5x faster but misses dense schools of small fish entirely; use it only when
+that is acceptable.
 
 ## Development
 
@@ -222,17 +149,13 @@ mypy fishcount
 ```
 
 Layout: `detector.py` (YOLO wrapper behind a small Detector protocol),
-`batch.py` (folder pipeline), `draw.py` (boxes + overlay), `count.py`
-(aggregation, Phase 2 seam), `config.py` (pydantic + config.yaml),
-`cli.py` (argparse + rich summary).
+`batch.py` (folder pipeline + results.json), `classify.py` (tiering and the
+three-file output), `sequence.py` (static-object detection across frames),
+`draw.py` (boxes), `config.py` (pydantic + config.yaml), `cli.py`.
 
-## Troubleshooting
-
-- "Fish detector weights not found": put `cfd-yolov12x.pt` in `models\`.
-- "'fishcount' is not recognized": activate the venv
-  (`.venv\Scripts\activate`) or use the .bat file, which finds the venv itself.
-- Corrupt or unreadable images are skipped with a warning; they appear in
-  `results.json` with an `"error"` field and are excluded from `counts.csv`.
+The last counting-capable version (base/dense/thorough stages, SAHI tiled
+inference) is preserved at tag `v0.2-three-stage` / branch
+`three-stage-pipeline` for reproducibility of earlier results.
 
 ## License
 

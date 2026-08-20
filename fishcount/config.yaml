@@ -4,27 +4,20 @@
 # Path to the Community Fish Detector weights (never auto-downloaded).
 #model_path: models/cfd-yolov12x.pt
 
-# Minimum detection confidence, 0 to 1.
-#conf: 0.25
+# Confidence floor, 0 to 1. Everything above it is recorded and tiered;
+# nothing is silently dropped. Raise it only if the not_confident file
+# is too large to be useful.
+#conf: 0.10
 
 # NMS IoU threshold, 0 to 1 (how much boxes may overlap before being merged).
-#iou: 0.5
+#iou: 0.7
 
-# Inference image size in pixels. The model was trained at 1024.
-# Lower (e.g. 640) is faster on CPU; higher (1536/2048) finds more small fish
-# at a steep CPU cost. This is the single biggest lever for small-fish recall.
-#imgsz: 1024
+# Inference image size in pixels. 1536 is the recall-first default; 1024 is
+# faster but misses dense schools of small fish entirely.
+#imgsz: 1536
 
 # Images per model pass. Lower this if you run out of RAM.
 #batch_size: 8
 
-# Max detections kept per image. Ultralytics silently caps this at 300 by
-# default, which truncates very dense schools. Raise it if a frame may hold
-# hundreds of fish.
-#max_det: 1000
-
-# SAHI tiled-inference settings, used only with --thorough.
-# Smaller tiles magnify tiny fish (640 or 512 work well on 4000 px frames);
-# more overlap recovers fish cut by tile seams, at proportional extra cost.
-#slice_size: 640
-#overlap_ratio: 0.2
+# Max detections kept per image.
+#max_det: 3000
