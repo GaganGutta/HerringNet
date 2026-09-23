@@ -19,3 +19,6 @@ last-run.log
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# annotated review renders are regenerable from labels + the run
+labels/review/*.jpg
