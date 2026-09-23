@@ -19,8 +19,11 @@ class ConfigError(RuntimeError):
 class AppConfig(BaseModel):
     """Inference and reporting settings.
 
+    `batch_size` left unset means "pick one for the device in use"; see
+    fishcount.detector.default_batch_size for the measured values.
+
     Two confidence numbers, and only two. `conf` is the recording floor: every
-    detection above it is written to results.json and detections.csv, so the
+    detection above it is written to the journal and detections.csv, so the
     raw record stays complete. `threshold` is the reporting threshold: the one
     number that decides which frames are counted as holding fish and which get
     an annotated image. Nothing else demotes, caps, or filters a detection.
@@ -35,8 +38,9 @@ class AppConfig(BaseModel):
     threshold: float = Field(default=0.25, ge=0.0, le=1.0)
     iou: float = Field(default=0.7, ge=0.0, le=1.0)
     imgsz: int = Field(default=1536, ge=32, le=8192)
-    batch_size: int = Field(default=8, ge=1, le=256)
+    batch_size: int | None = Field(default=None, ge=1, le=256)
     max_det: int = Field(default=3000, ge=1, le=100000)
+    device: str = Field(default="auto", pattern=r"^(auto|cpu|cuda(:\d+)?)$")
 
 
 def load_config(path: Path | None = None) -> AppConfig:

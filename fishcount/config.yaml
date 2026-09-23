@@ -4,7 +4,7 @@
 # Path to the Community Fish Detector weights (never auto-downloaded).
 #model_path: models/cfd-yolov12x.pt
 
-# Recording floor, 0 to 1. Every box above it is written to results.json and
+# Recording floor, 0 to 1. Every box above it is written to the journal and
 # detections.csv and is never dropped, so any threshold at or above this can be
 # evaluated later without re-running the detector.
 #conf: 0.10
@@ -12,6 +12,8 @@
 # Reporting threshold, 0 to 1. The one number that decides which frames count
 # as holding fish and which get an annotated image. Nothing else filters a
 # detection: no size rule, no blur rule, no cross-frame rule.
+# Changing this does NOT invalidate a finished run: `fishcount report <out>`
+# rewrites the CSVs at a new threshold without touching the model.
 #threshold: 0.25
 
 # NMS IoU threshold, 0 to 1 (how much boxes may overlap before being merged).
@@ -21,8 +23,15 @@
 # faster but misses dense schools of small fish entirely.
 #imgsz: 1536
 
-# Images per model pass. Lower this if you run out of RAM.
-#batch_size: 8
+# Where to run: auto (a GPU if there is one, else the CPU), cpu, or cuda / cuda:N.
+#device: auto
+
+# Images per model pass. Unset means "pick one for the device": 1 on a GPU,
+# 8 on the CPU. On an 8 GB card at imgsz 1536 this model needs ~2.4 GB per
+# image, so 3 is the most that fits and 1 is the fastest -- raising this on a
+# GPU makes runs slower, not faster. A batch too big for VRAM is split
+# automatically rather than crashing the run.
+#batch_size: 1
 
 # Max detections kept per image.
 #max_det: 3000

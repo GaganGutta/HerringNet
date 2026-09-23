@@ -4,20 +4,16 @@ import csv
 import json
 from pathlib import Path
 
+from fishcount.journal import JOURNAL_FILENAME
 from fishcount.report import write_reports
+from helpers import write_image
 
 
-def _results(out_dir: Path, images: list[dict]) -> Path:
+def _journal(out_dir: Path, images: list[dict]) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "input": "x",
-        "model": "m",
-        "conf": 0.1,
-        "threshold": 0.25,
-        "imgsz": 1536,
-        "images": images,
-    }
-    (out_dir / "results.json").write_text(json.dumps(payload), encoding="utf-8")
+    with (out_dir / JOURNAL_FILENAME).open("w", encoding="utf-8", newline="\n") as handle:
+        for image in images:
+            handle.write(json.dumps(image) + "\n")
     return out_dir
 
 
@@ -40,7 +36,7 @@ def _read(path: Path) -> list[dict[str, str]]:
 
 
 def test_every_recorded_box_becomes_a_row_with_its_area_fraction(tmp_path: Path) -> None:
-    out = _results(
+    out = _journal(
         tmp_path / "out",
         [
             _frame(
@@ -63,7 +59,7 @@ def test_every_recorded_box_becomes_a_row_with_its_area_fraction(tmp_path: Path)
 
 
 def test_frames_csv_is_a_complete_census_including_empty_frames(tmp_path: Path) -> None:
-    out = _results(
+    out = _journal(
         tmp_path / "out",
         [
             _frame("b.jpg", [{"box": [0, 0, 10, 10], "confidence": 0.8}]),
@@ -92,7 +88,7 @@ def test_threshold_only_changes_the_counts_never_the_rows(tmp_path: Path) -> Non
         {"box": [0, 0, 10, 10], "confidence": 0.20},
         {"box": [0, 0, 10, 10], "confidence": 0.40},
     ]
-    out = _results(tmp_path / "out", [_frame("a.jpg", detections)])
+    out = _journal(tmp_path / "out", [_frame("a.jpg", detections)])
 
     write_reports(out, threshold=0.25)
     at_25 = _read(out / "detections.csv")
@@ -108,7 +104,7 @@ def test_threshold_only_changes_the_counts_never_the_rows(tmp_path: Path) -> Non
 
 
 def test_unreadable_frame_is_marked_not_silently_a_zero_detection_frame(tmp_path: Path) -> None:
-    out = _results(
+    out = _journal(
         tmp_path / "out",
         [{"file": "bad.jpg", "error": "unreadable image"}, _frame("good.jpg", [])],
     )
@@ -123,3 +119,67 @@ def test_unreadable_frame_is_marked_not_silently_a_zero_detection_frame(tmp_path
     assert rows["good.jpg"]["max_conf"] == "0.000"
     assert summary.unreadable == 1
     assert summary.frames == 2
+
+
+def test_annotated_images_are_written_only_for_frames_at_or_above_threshold(
+    tmp_path: Path,
+) -> None:
+    folder = tmp_path / "in"
+    for name in ("hit.jpg", "miss.jpg", "sub/deep.jpg"):
+        write_image(folder / name)
+    out = _journal(
+        tmp_path / "out",
+        [
+            _frame("hit.jpg", [{"box": [1, 1, 20, 20], "confidence": 0.9}]),
+            _frame("miss.jpg", [{"box": [1, 1, 20, 20], "confidence": 0.15}]),
+            _frame("sub/deep.jpg", [{"box": [1, 1, 20, 20], "confidence": 0.4}]),
+        ],
+    )
+
+    summary = write_reports(out, threshold=0.25, input_dir=folder, write_images=True)
+
+    assert (out / "annotated" / "hit.jpg").is_file()
+    assert (out / "annotated" / "sub" / "deep.jpg").is_file()  # nesting is preserved
+    assert not (out / "annotated" / "miss.jpg").exists()
+    assert summary.annotated == 2
+
+
+def test_rereporting_at_a_higher_threshold_clears_stale_annotated_images(
+    tmp_path: Path,
+) -> None:
+    """Annotated images must match the threshold that produced them, not an old one."""
+    folder = tmp_path / "in"
+    write_image(folder / "a.jpg")
+    hit = _frame("a.jpg", [{"box": [1, 1, 20, 20], "confidence": 0.4}])
+    out = _journal(tmp_path / "out", [hit])
+    write_reports(out, threshold=0.25, input_dir=folder, write_images=True)
+    assert (out / "annotated" / "a.jpg").is_file()
+
+    write_reports(out, threshold=0.75, input_dir=folder, write_images=True)
+
+    assert not (out / "annotated" / "a.jpg").exists()
+
+
+def test_a_frame_that_vanished_since_detection_does_not_fail_the_report(tmp_path: Path) -> None:
+    folder = tmp_path / "in"
+    folder.mkdir()
+    gone = _frame("gone.jpg", [{"box": [1, 1, 5, 5], "confidence": 0.9}])
+    out = _journal(tmp_path / "out", [gone])
+
+    summary = write_reports(out, threshold=0.25, input_dir=folder, write_images=True)
+
+    assert summary.annotated == 0
+    assert summary.frames_above_threshold == 1  # the CSVs are unaffected
+    assert len(_read(out / "detections.csv")) == 1
+
+
+def test_frames_are_sorted_even_when_the_journal_is_not(tmp_path: Path) -> None:
+    """A resumed run appends out of order; the CSVs still read top-to-bottom."""
+    out = _journal(
+        tmp_path / "out",
+        [_frame("c.jpg", []), _frame("a.jpg", []), _frame("b.jpg", [])],
+    )
+
+    write_reports(out, threshold=0.25)
+
+    assert [row["frame"] for row in _read(out / "frames.csv")] == ["a.jpg", "b.jpg", "c.jpg"]

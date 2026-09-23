@@ -1,21 +1,24 @@
-"""Folder pipeline: discover images, run batched detection, record every detection.
+"""Folder pipeline: discover images, run batched detection, journal every frame.
 
 Each image is read from disk exactly once; the same decoded array feeds
-inference, the per-frame statistics (blur and brightness), and annotation.
-Input files are never written to. Output is detections only: results.json
-(every frame, every detection above the recording floor, plus the frame
-statistics) and annotated copies of the frames that hold a detection at or
-above the reporting threshold. fishcount.report turns results.json into the
-two CSVs; nothing between here and there filters a detection.
+inference and the per-frame statistics (blur and brightness). Input files are
+never written to.
+
+Nothing accumulates. Frames are streamed a batch at a time and appended to the
+journal as each batch finishes, so memory is flat whether the folder holds
+fifty frames or fifty thousand, and a run killed halfway through keeps
+everything it had already recorded. Re-running picks up where it left off.
+
+Detection is all that happens here. The CSVs and the annotated images are
+written afterwards by fishcount.report, which reads the journal.
 """
 
 from __future__ import annotations
 
 import io
-import json
 import time
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
@@ -24,8 +27,17 @@ from PIL import Image
 from tqdm import tqdm
 
 from fishcount.config import AppConfig
-from fishcount.detector import Detection, Detector, ImageArray
-from fishcount.draw import annotate
+from fishcount.detector import Detection, Detector, ImageArray, default_batch_size
+from fishcount.journal import (
+    JOURNAL_FILENAME,
+    JournalWriter,
+    ResumeMismatchError,
+    RunParams,
+    completed_frames,
+    describe_mismatch,
+    read_params,
+    write_params,
+)
 
 IMAGE_EXTENSIONS = {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
 
@@ -41,6 +53,8 @@ _EXIF_TRANSFORMS: dict[int, Callable[[ImageArray], ImageArray]] = {
     8: lambda a: cv2.rotate(a, cv2.ROTATE_90_COUNTERCLOCKWISE),
 }
 
+_LOG_EVERY = 100  # frames between throughput lines, for when output is a log file
+
 
 class NoImagesFoundError(RuntimeError):
     """The input folder contains no files with a supported image extension."""
@@ -55,32 +69,27 @@ class FrameStats:
 
 
 @dataclass(slots=True)
-class ImageResult:
-    """Everything recorded for one frame."""
-
-    file: str
-    width: int = 0
-    height: int = 0
-    blur: float | None = None
-    brightness: float | None = None
-    detections: list[Detection] = field(default_factory=list)
-    error: str | None = None
-
-
-@dataclass(slots=True)
 class BatchSummary:
     """What happened during one run, for the console summary."""
 
     input_dir: Path
     out_dir: Path
-    processed: int
-    skipped: int
+    total: int  # frames in the input folder
+    already_done: int  # frames the journal already held, skipped this run
+    processed: int  # frames detected in this run
+    skipped: int  # frames this run could not read
     seconds: float
-    conf: float  # the recording floor this run used
+    conf: float
+    device: str
+    oom_splits: int = 0
 
     @property
     def seconds_per_image(self) -> float:
         return self.seconds / self.processed if self.processed else 0.0
+
+    @property
+    def images_per_second(self) -> float:
+        return self.processed / self.seconds if self.seconds > 0 else 0.0
 
 
 def discover_images(input_dir: Path, exclude_dir: Path | None = None) -> list[Path]:
@@ -144,16 +153,16 @@ def run_batch(
     config: AppConfig,
     detector: Detector,
     *,
-    write_images: bool = True,
     show_progress: bool = True,
     model_path: Path | None = None,
+    resume: bool = True,
 ) -> BatchSummary:
-    """Detect in every image under input_dir; write results.json and annotated frames.
+    """Detect in every image under input_dir, appending each frame to the journal.
 
-    Inference runs in batches of config.batch_size. Unreadable images are
-    skipped with a warning and recorded in results.json. Annotated copies are
-    written to out_dir/annotated/ only for frames holding a detection at or
-    above config.threshold, and show every recorded box with its confidence.
+    With `resume` (the default), frames already in the journal are skipped and
+    the run continues from where a previous one stopped; the settings the
+    journal was built under must match, or ResumeMismatchError is raised rather
+    than mixing results. Without it, the journal is discarded and rebuilt.
     """
     images = discover_images(input_dir, exclude_dir=out_dir)
     if not images:
@@ -161,115 +170,122 @@ def run_batch(
         raise NoImagesFoundError(f"No images found under {input_dir} (extensions: {extensions})")
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    annotated_dir = out_dir / "annotated"
-    results: list[ImageResult] = []
+    journal = out_dir / JOURNAL_FILENAME
+    params = RunParams(
+        model=str(model_path if model_path is not None else config.model_path),
+        conf=config.conf,
+        iou=config.iou,
+        imgsz=config.imgsz,
+        max_det=config.max_det,
+    )
+
+    done: set[str] = set()
+    if resume:
+        stored = read_params(out_dir)
+        if stored is not None and stored != params:
+            raise ResumeMismatchError(describe_mismatch(stored, params))
+        done = completed_frames(journal)
+    else:
+        journal.unlink(missing_ok=True)
+    write_params(out_dir, params)
+
+    pending = [path for path in images if path.relative_to(input_dir).as_posix() not in done]
+    device = getattr(detector, "device", "cpu")
+    batch_size = config.batch_size if config.batch_size is not None else default_batch_size(device)
+
+    processed = 0
+    unreadable = 0
     start = time.perf_counter()
-    progress = tqdm(total=len(images), unit="img", desc="Detecting", disable=not show_progress)
+    progress = tqdm(
+        total=len(pending), unit="img", desc="Detecting", disable=not show_progress, smoothing=0.1
+    )
     try:
-        for chunk in _chunks(images, config.batch_size):
-            per_path: dict[Path, ImageResult] = {}
-            loaded: list[tuple[Path, ImageArray]] = []
-            for path in chunk:
-                array = load_image(path)
-                if array is None:
-                    tqdm.write(f"WARNING: skipping unreadable image: {path}")
-                    per_path[path] = ImageResult(
-                        file=path.relative_to(input_dir).as_posix(), error="unreadable image"
-                    )
-                    progress.update(1)
-                else:
-                    loaded.append((path, array))
-            if loaded:
-                batch_detections = detector.detect_batch([array for _, array in loaded])
-                for (path, array), detections in zip(loaded, batch_detections, strict=True):
-                    relative = path.relative_to(input_dir)
-                    height, width = array.shape[:2]
-                    above = any(d.confidence >= config.threshold for d in detections)
-                    if write_images and above:
-                        _write_annotated(annotate(array, detections), annotated_dir / relative)
-                    stats = frame_stats(array)
-                    per_path[path] = ImageResult(
-                        relative.as_posix(),
-                        width,
-                        height,
-                        stats.blur,
-                        stats.brightness,
-                        detections,
-                    )
-                    progress.update(1)
-            results.extend(per_path[path] for path in chunk)
+        with JournalWriter(journal) as writer:
+            for chunk in _chunks(pending, batch_size):
+                loaded: list[tuple[Path, ImageArray]] = []
+                for path in chunk:
+                    array = load_image(path)
+                    if array is None:
+                        tqdm.write(f"WARNING: skipping unreadable image: {path}")
+                        writer.append(
+                            {
+                                "file": path.relative_to(input_dir).as_posix(),
+                                "error": "unreadable image",
+                            }
+                        )
+                        unreadable += 1
+                        progress.update(1)
+                    else:
+                        loaded.append((path, array))
+                if loaded:
+                    detections = detector.detect_batch([array for _, array in loaded])
+                    for (path, array), boxes in zip(loaded, detections, strict=True):
+                        writer.append(_entry(path.relative_to(input_dir), array, boxes))
+                        processed += 1
+                        progress.update(1)
+                writer.flush()  # a kill after this point cannot lose this batch
+                _log_throughput(processed + unreadable, len(pending), start, show_progress)
     finally:
         progress.close()
-    seconds = time.perf_counter() - start
 
-    write_results_json(
-        results,
-        out_dir / "results.json",
-        input_dir=input_dir,
-        model_path=model_path if model_path is not None else config.model_path,
-        conf=config.conf,
-        threshold=config.threshold,
-        imgsz=config.imgsz,
-    )
-    processed = sum(1 for result in results if result.error is None)
     return BatchSummary(
         input_dir=input_dir,
         out_dir=out_dir,
+        total=len(images),
+        already_done=len(images) - len(pending),
         processed=processed,
-        skipped=len(results) - processed,
-        seconds=seconds,
+        skipped=unreadable,
+        seconds=time.perf_counter() - start,
         conf=config.conf,
+        device=device,
+        oom_splits=getattr(detector, "oom_splits", 0),
     )
 
 
-def write_results_json(
-    results: Sequence[ImageResult],
-    path: Path,
-    *,
-    input_dir: Path,
-    model_path: Path,
-    conf: float,
-    threshold: float,
-    imgsz: int,
-) -> None:
-    """Full per-detection dump: boxes as [x1, y1, x2, y2] pixels plus confidence."""
-    payload = {
-        "input": str(input_dir),
-        "model": str(model_path),
-        "conf": conf,
-        "threshold": threshold,
-        "imgsz": imgsz,
-        "images": [_image_entry(result) for result in results],
-    }
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-
-def _image_entry(result: ImageResult) -> dict[str, object]:
-    if result.error is not None:
-        return {"file": result.file, "error": result.error}
+def _entry(relative: Path, array: ImageArray, detections: Sequence[Detection]) -> dict[str, object]:
+    """One frame's journal record: boxes as [x1, y1, x2, y2] pixels, plus stats."""
+    height, width = array.shape[:2]
+    stats = frame_stats(array)
     return {
-        "file": result.file,
-        "width": result.width,
-        "height": result.height,
-        "blur": round(result.blur, 1) if result.blur is not None else None,
-        "brightness": round(result.brightness, 1) if result.brightness is not None else None,
+        "file": relative.as_posix(),
+        "width": width,
+        "height": height,
+        "blur": round(stats.blur, 1),
+        "brightness": round(stats.brightness, 1),
         "detections": [
             {"box": list(detection.int_box()), "confidence": round(detection.confidence, 3)}
-            for detection in result.detections
+            for detection in detections
         ],
     }
 
 
-def _write_annotated(image: ImageArray, dest: Path) -> None:
-    """Encode with the original extension (PNG as a fallback); unicode-path safe."""
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    ok, encoded = cv2.imencode(dest.suffix.lower(), image)
-    if not ok:
-        dest = dest.with_suffix(".png")
-        ok, encoded = cv2.imencode(".png", image)
-    if not ok:
-        raise OSError(f"could not encode annotated image for {dest}")
-    encoded.tofile(str(dest))
+def _log_throughput(done: int, total: int, start: float, show_progress: bool) -> None:
+    """Throughput and ETA, at intervals, so a redirected log still shows progress."""
+    if not show_progress or done == 0 or total == 0:
+        return
+    if done % _LOG_EVERY and done != total:
+        return
+    elapsed = time.perf_counter() - start
+    rate = done / elapsed if elapsed > 0 else 0.0
+    if rate <= 0:
+        tqdm.write(f"  {done}/{total} frames")
+        return
+    tqdm.write(
+        f"  {done}/{total} frames | {rate:.2f} img/s ({1 / rate:.2f} s/frame) "
+        f"| elapsed {_duration(elapsed)} | ETA {_duration((total - done) / rate)}"
+    )
+
+
+def _duration(seconds: float) -> str:
+    """Compact h/m/s, because a 15,000-frame ETA in seconds means nothing."""
+    total = int(seconds)
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    if minutes:
+        return f"{minutes}m{secs:02d}s"
+    return f"{secs}s"
 
 
 def _exif_orientation(data: bytes) -> int:

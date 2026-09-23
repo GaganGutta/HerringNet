@@ -23,6 +23,15 @@ to a separate folder.
 
    This downloads roughly 2 GB of packages (the torch wheel is large).
    It is a one-time step; everything runs offline afterwards.
+
+   That installs the CPU build of torch. For an NVIDIA GPU, install a CUDA
+   build instead (pick the index matching your driver):
+
+   ```
+   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
+   ```
+
+   Nothing else changes: the GPU is picked up automatically when it works.
 3. Put the model weights at `models\cfd-yolov12x.pt`. The tool never downloads,
    retrains, or substitutes a model: if the file is missing it stops and tells
    you where to put it. Weight files are git-ignored.
@@ -43,7 +52,8 @@ output\120GOPRO\
   detections.csv   one row per box
   frames.csv       one row per frame, including frames with no boxes
   annotated\       annotated copies of frames at or above the threshold
-  results.json     the raw record: every detection + per-frame statistics
+  results.jsonl    the raw record: one frame per line, written as the run goes
+  run.json         the detection settings this run used
 ```
 
 `detections.csv` — every box the model produced above the recording floor:
@@ -66,16 +76,27 @@ output\120GOPRO\
 | `brightness` | mean grayscale value, 0-255 |
 | `error` | set if the frame could not be read; the metrics are then blank |
 
+Frames are identified by their path relative to the input folder, never by
+filename alone. GoPro recycles filenames between cards and deployments, so the
+same basename can name completely different photographs in different folders.
+
 ## Two numbers, and no other rules
 
 **`conf` (default 0.10) is the recording floor.** Every box above it is written
-to `results.json` and `detections.csv` and is never dropped.
+to `results.jsonl` and `detections.csv` and is never dropped.
 
 **`threshold` (default 0.25) is the reporting threshold.** It is applied in
 exactly one place — `n_boxes_above_threshold`, which also decides which frames
-get an annotated image. Because `detections.csv` keeps every box with its
-confidence, any threshold at or above the floor can be evaluated later without
-re-running the detector.
+get an annotated image.
+
+Detection never sees the threshold, which is what lets you change your mind:
+
+```
+fishcount report output\120GOPRO --threshold 0.4 --folder "C:\path\to\your images"
+```
+
+rewrites both CSVs and redraws the annotated images from the existing run. No
+inference, so it takes seconds rather than hours.
 
 Nothing else filters, demotes, or caps a detection. There is no size rule, no
 blur rule, no cross-frame recurrence rule, and no tier system.
@@ -101,6 +122,65 @@ The full heuristic implementation is preserved at tag `v0.3-heuristics`, and
 the last counting-capable version (base/dense/thorough stages, SAHI tiled
 inference) at tag `v0.2-three-stage` / branch `three-stage-pipeline`.
 
+## Long runs
+
+A pass over thousands of 4000x3000 frames takes hours, so a run is built to be
+interrupted.
+
+**It resumes by itself.** Each frame is appended to `results.jsonl` and flushed
+to disk as its batch finishes. Re-running the same command skips every frame
+already in there and finishes the rest. Killing the process — Ctrl-C, a closed
+laptop, a power cut — costs at most the batch in flight. A half-written final
+line is detected and that one frame is simply redone.
+
+**It refuses to mix runs.** `run.json` records the settings the journal was
+built under. Resuming with a different model, `conf`, `iou`, `imgsz` or
+`max_det` stops with an explanation instead of blending incompatible results;
+`--restart` detects the folder again from scratch. The reporting threshold is
+deliberately not on that list, so changing it never costs a re-run.
+
+**Memory is flat.** Nothing accumulates: frames are streamed a batch at a time
+into the journal, and read back one at a time when the CSVs are written. Peak
+memory measured at 1455 MiB over 6 frames and 1444 MiB over 50 — eight times
+the work, no growth.
+
+**Throughput and ETA are logged** every 100 frames as well as on the progress
+bar, so a run redirected to a log file still says where it is.
+
+## Speed
+
+Measured on this project's frames (4000x3000, imgsz 1536), end to end,
+including JPEG decode and the per-frame statistics:
+
+| Device | s/frame | img/s | 15,000 frames |
+| --- | --- | --- | --- |
+| RTX 4070 Laptop (8 GB) | 0.43 | 2.3 | ~1h 50m |
+| Laptop CPU | 5.4 | 0.19 | ~23h |
+
+The GPU is used automatically when torch can see one. CPU and GPU results are
+equivalent but not bit-identical: boxes land within a pixel and confidences
+within 0.001, which is ordinary floating-point difference between CUDA and CPU
+kernels, not a bug.
+
+**Batch size is not a speed knob on a GPU.** This model at imgsz 1536 needs
+about 2.4 GB of VRAM for a single image, and one image already saturates an
+RTX 4070. Measured on an 8 GB card:
+
+| Batch | s/frame | Peak VRAM | Share of an 8 GB card |
+| --- | --- | --- | --- |
+| 1 | 0.31 | 2.4 GB | 29% |
+| 2 | 0.34 | 4.5 GB | 56% |
+| 3 | 0.35 | 6.4 GB | 81% |
+| 4 | 1.05 | 8.4 GB | 105% — spills to system RAM |
+
+Three is the largest batch that fits; one is the fastest. Past the card's
+capacity Windows lets CUDA spill into system RAM over PCIe and throughput
+collapses, so the default is 1 on a GPU and 8 on the CPU. A batch that will not
+fit is split in half and retried rather than killing the run.
+
+`--imgsz 1024` is about 2.5x faster again but misses dense schools of small
+fish entirely; use it only when that is acceptable.
+
 ## Known limitations
 
 - **The reporting threshold is not yet validated.** 0.25 is a placeholder
@@ -116,6 +196,8 @@ inference) at tag `v0.2-three-stage` / branch `three-stage-pipeline`.
 
 ## Flags
 
+`fishcount detect FOLDER`:
+
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--name NAME` / `--out DIR` | input folder's name | where results go under `output\` |
@@ -124,20 +206,22 @@ inference) at tag `v0.2-three-stage` / branch `three-stage-pipeline`.
 | `--imgsz INT` | `1536` | inference size; 1024 is faster but misses dense schools of small fish |
 | `--iou FLOAT` | `0.7` | NMS IoU; higher keeps tightly packed fish |
 | `--max-det INT` | `3000` | max detections per image |
-| `--batch-size INT` | `8` | images per model pass; lower if RAM is tight |
-| `--no-images` | off | CSVs and results.json only |
+| `--device` | `auto` | `auto`, `cpu`, or `cuda` / `cuda:N` |
+| `--batch-size INT` | 1 on GPU, 8 on CPU | images per model pass |
+| `--restart` | off | discard previous results for this output folder instead of resuming |
+| `--no-images` | off | CSVs only |
 | `--open` | off | open the output folder when finished |
+
+`fishcount report OUT_DIR` re-derives the CSVs from a finished run:
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--threshold FLOAT` | `0.25` | the threshold to report at |
+| `--folder DIR` | none | the original image folder, needed only to redraw annotated images |
+| `--no-images` | off | CSVs only |
 
 Defaults can also be set in [config.yaml](config.yaml). Precedence:
 CLI flags > config.yaml > built-in defaults.
-
-## Speed
-
-One pass at imgsz 1536 costs roughly 6 s per 4000x3000 frame on a laptop CPU
-(batched, model loaded once, each image read from disk exactly once; blur and
-brightness are computed from the already-decoded image). `--imgsz 1024` is
-about 2.5x faster but misses dense schools of small fish entirely; use it only
-when that is acceptable.
 
 ## Development
 
@@ -149,10 +233,11 @@ ruff format .
 mypy fishcount
 ```
 
-Layout: `detector.py` (YOLO wrapper behind a small Detector protocol),
-`batch.py` (folder pipeline, per-frame statistics, results.json),
-`report.py` (results.json to the two CSVs), `draw.py` (boxes),
-`config.py` (pydantic + config.yaml), `cli.py`.
+Layout: `detector.py` (YOLO wrapper behind a small Detector protocol, device
+choice, out-of-memory backoff), `batch.py` (folder pipeline, per-frame
+statistics), `journal.py` (the resumable on-disk record), `report.py` (journal
+to CSVs and annotated images), `draw.py` (boxes), `config.py` (pydantic +
+config.yaml), `cli.py`.
 
 ## License
 
