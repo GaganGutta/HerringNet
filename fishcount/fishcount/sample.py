@@ -300,34 +300,69 @@ def _spread(
     blur_cuts: Sequence[float],
     rng: random.Random,
 ) -> list[FrameRecord]:
-    """Take `count` frames, round robin over (folder, brightness, blur) cells.
+    """Take `count` frames, round robin over folders and then over conditions.
 
-    Round robin rather than proportional: a folder with 999 frames and one
-    with 60 both get looked at, which is the point of stratifying by folder.
+    Folders come first and conditions second, deliberately. A flat round robin
+    over every (folder, brightness, blur) cell looks fair but is not: there are
+    far more cells than frames to draw, so whichever cells come last in the
+    iteration order never get reached at all. Going folder by folder means a
+    folder is only skipped once every other folder has had its turn, which is
+    what "stratified by folder" has to mean when the sample is smaller than the
+    number of strata.
+
+    The folder order is shuffled once and the starting folder rotates every
+    pass, so the frames left over when `count` is not a multiple of the folder
+    count do not always land on the same folders.
     """
     if count <= 0:
         return []
-    cells: dict[tuple[str, str, str], list[FrameRecord]] = defaultdict(list)
+    by_folder: dict[str, dict[tuple[str, str], list[FrameRecord]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
     for record in records:
-        cells[
-            (
-                record.folder,
-                bin_of(record.brightness, brightness_cuts),
-                bin_of(record.blur, blur_cuts),
-            )
-        ].append(record)
-    for rows in cells.values():
-        rng.shuffle(rows)
+        condition = (
+            bin_of(record.brightness, brightness_cuts),
+            bin_of(record.blur, blur_cuts),
+        )
+        by_folder[record.folder][condition].append(record)
+    for cells in by_folder.values():
+        for rows in cells.values():
+            rng.shuffle(rows)
 
+    folders = sorted(by_folder)
+    rng.shuffle(folders)
+    cursor = dict.fromkeys(folders, 0)  # which condition cell each folder is up to
     picked: list[FrameRecord] = []
-    keys = sorted(cells)
-    while len(picked) < count and any(cells[key] for key in keys):
-        for key in keys:
+    start = 0
+    while len(picked) < count:
+        took_any = False
+        for offset in range(len(folders)):
             if len(picked) >= count:
                 break
-            if cells[key]:
-                picked.append(cells[key].pop())
+            folder = folders[(start + offset) % len(folders)]
+            taken = _take_next(by_folder[folder], cursor, folder)
+            if taken is not None:
+                picked.append(taken)
+                took_any = True
+        if not took_any:
+            break  # every folder is exhausted
+        start = (start + 1) % len(folders)
     return picked
+
+
+def _take_next(
+    cells: dict[tuple[str, str], list[FrameRecord]],
+    cursor: dict[str, int],
+    folder: str,
+) -> FrameRecord | None:
+    """One frame from this folder's next non-empty condition cell, or None."""
+    keys = sorted(cells)
+    for step in range(len(keys)):
+        key = keys[(cursor[folder] + step) % len(keys)]
+        if cells[key]:
+            cursor[folder] = (cursor[folder] + step + 1) % len(keys)
+            return cells[key].pop()
+    return None
 
 
 def _top_up_large_boxes(

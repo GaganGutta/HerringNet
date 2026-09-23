@@ -233,3 +233,47 @@ def test_written_sample_is_keyed_by_frame_id_and_meta_records_the_choice(
     assert meta["sample_size"] == 30
     assert len(meta["brightness_cuts"]) == 2
     assert meta["band_counts"]
+
+
+def test_no_folder_is_starved_by_the_iteration_order() -> None:
+    """A flat round robin over condition cells silently drops the last folders.
+
+    There are more (folder, brightness, blur) cells than frames to draw, so a
+    single pass never reaches the end of the cell list. Folders must therefore
+    take turns ahead of conditions, or whichever folder sorts last gets nothing.
+    """
+    records = _population()
+    # Same band mix as the rest, but names that sort last: the ones a naive
+    # single pass over sorted cells never reaches.
+    for name in ("zzz8GOPRO", "zzz9GOPRO"):
+        for i in range(60):
+            conf, boxes = (0.0, 0)
+            if i % 4 == 1:
+                conf, boxes = (0.15, 1)
+            elif i % 4 == 2:
+                conf, boxes = (0.35, 1)
+            elif i % 4 == 3:
+                conf, boxes = (0.80, 2)
+            records.append(
+                _record(
+                    f"Primary camera/DCIM/{name}/GOPR{i:04d}.JPG",
+                    conf=conf,
+                    boxes=boxes,
+                    blur=10.0 + i,
+                    brightness=40.0 + i * 2,
+                )
+            )
+
+    result = stratified_sample(records, size=90, seed=1)
+
+    assert len(result.folder_counts) == 8  # every folder, not just the early ones
+    assert min(result.folder_counts.values()) >= 1
+    # and the share is even: folders taking turns means no order-of-magnitude gap
+    assert max(result.folder_counts.values()) <= 2 * min(result.folder_counts.values())
+
+
+def test_every_folder_appears_when_the_sample_is_bigger_than_the_folder_count() -> None:
+    result = stratified_sample(_population(), size=60, seed=4)
+
+    assert len(result.folder_counts) == 6
+    assert all(count >= 5 for count in result.folder_counts.values())

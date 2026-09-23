@@ -1,0 +1,75 @@
+{
+  "seed": 20260922,
+  "population": 15381,
+  "sample_size": 300,
+  "sources": {
+    "ALLFISHDATA": "output\\ALLFISHDATA",
+    "120GOPRO": "output\\120GOPRO"
+  },
+  "brightness_cuts": [
+    68.6,
+    109.6
+  ],
+  "blur_cuts": [
+    46.5,
+    66.2
+  ],
+  "conf_bands": {
+    "none": [
+      0.0,
+      0.0
+    ],
+    "low": [
+      0.0,
+      0.25
+    ],
+    "mid": [
+      0.25,
+      0.5
+    ],
+    "high": [
+      0.5,
+      1.01
+    ]
+  },
+  "band_quotas": {
+    "none": 90,
+    "low": 70,
+    "mid": 70,
+    "high": 70
+  },
+  "band_counts": {
+    "none": 90,
+    "high": 70,
+    "mid": 70,
+    "low": 70
+  },
+  "camera_counts": {
+    "120GOPRO": 20,
+    "Predator": 133,
+    "Primary": 147
+  },
+  "folder_counts": {
+    "120GOPRO": 20,
+    "ALLFISHDATA/Predator camera/DCIM/100GOPRO": 20,
+    "ALLFISHDATA/Predator camera/DCIM/101GOPRO": 18,
+    "ALLFISHDATA/Predator camera/DCIM/102GOPRO": 19,
+    "ALLFISHDATA/Predator camera/DCIM/103GOPRO": 20,
+    "ALLFISHDATA/Predator camera/DCIM/104GOPRO": 18,
+    "ALLFISHDATA/Predator camera/DCIM/105GOPRO": 19,
+    "ALLFISHDATA/Predator camera/DCIM/106GOPRO": 19,
+    "ALLFISHDATA/Primary camera/DCIM/100GOPRO": 20,
+    "ALLFISHDATA/Primary camera/DCIM/101GOPRO": 19,
+    "ALLFISHDATA/Primary camera/DCIM/102GOPRO": 18,
+    "ALLFISHDATA/Primary camera/DCIM/103GOPRO": 17,
+    "ALLFISHDATA/Primary camera/DCIM/104GOPROSOURCE": 19,
+    "ALLFISHDATA/Primary camera/DCIM/105GOPRO": 18,
+    "ALLFISHDATA/Primary camera/DCIM/106GOPRO": 18,
+    "ALLFISHDATA/Primary camera/DCIM/107GOPRO": 18
+  },
+  "large_box_frac": 0.1,
+  "large_box_count": 58,
+  "forced_include": [
+    "120GOPRO/GOPR7891.JPG"
+  ]
+}
