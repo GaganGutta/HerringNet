@@ -9,6 +9,7 @@ def test_defaults_when_no_config_file(tmp_path: Path, monkeypatch: pytest.Monkey
     monkeypatch.chdir(tmp_path)
     config = load_config()
     assert config.conf == 0.10
+    assert config.threshold == 0.25
     assert config.iou == 0.7
     assert config.imgsz == 1536
     assert config.batch_size == 8
@@ -43,5 +44,6 @@ def test_merge_overrides_validates_and_skips_none() -> None:
     config = AppConfig()
     assert merge_overrides(config, conf=None) is config
     assert merge_overrides(config, conf=0.7).conf == 0.7
+    assert merge_overrides(config, threshold=0.4).threshold == 0.4
     with pytest.raises(ConfigError):
         merge_overrides(config, conf=3.0)

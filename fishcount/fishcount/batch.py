@@ -1,10 +1,12 @@
 """Folder pipeline: discover images, run batched detection, record every detection.
 
 Each image is read from disk exactly once; the same decoded array feeds
-inference, the per-frame blur score, and annotation. Input files are never
-written to. Output is detections only: results.json (every frame, every
-detection above the floor, plus the blur score) and annotated copies of the
-frames that have detections. Tiering happens afterwards in fishcount.classify.
+inference, the per-frame statistics (blur and brightness), and annotation.
+Input files are never written to. Output is detections only: results.json
+(every frame, every detection above the recording floor, plus the frame
+statistics) and annotated copies of the frames that hold a detection at or
+above the reporting threshold. fishcount.report turns results.json into the
+two CSVs; nothing between here and there filters a detection.
 """
 
 from __future__ import annotations
@@ -44,6 +46,14 @@ class NoImagesFoundError(RuntimeError):
     """The input folder contains no files with a supported image extension."""
 
 
+@dataclass(frozen=True, slots=True)
+class FrameStats:
+    """Per-frame image statistics, both measured at quarter resolution."""
+
+    blur: float  # variance of the Laplacian
+    brightness: float  # mean grayscale value, 0-255
+
+
 @dataclass(slots=True)
 class ImageResult:
     """Everything recorded for one frame."""
@@ -51,7 +61,8 @@ class ImageResult:
     file: str
     width: int = 0
     height: int = 0
-    blur: float | None = None  # variance of Laplacian at quarter resolution
+    blur: float | None = None
+    brightness: float | None = None
     detections: list[Detection] = field(default_factory=list)
     error: str | None = None
 
@@ -65,6 +76,7 @@ class BatchSummary:
     processed: int
     skipped: int
     seconds: float
+    conf: float  # the recording floor this run used
 
     @property
     def seconds_per_image(self) -> float:
@@ -112,17 +124,18 @@ def load_image(path: Path) -> ImageArray | None:
     return result
 
 
-def blur_score(array: ImageArray) -> float:
-    """Variance of the Laplacian at quarter resolution.
+def frame_stats(array: ImageArray) -> FrameStats:
+    """Blur and brightness for one frame, from a single quarter-resolution pass.
 
-    The absolute value tracks turbidity and lighting as much as focus, so it is
-    only meaningful relative to the same run's distribution (fishcount.classify
-    normalizes by percentile per folder).
+    Both are recorded, never acted on: they exist so that evaluation can break
+    detector performance down by condition. Blur is the variance of the
+    Laplacian, whose absolute value tracks turbidity and lighting as much as
+    focus; brightness is the mean grayscale value.
     """
     height, width = array.shape[:2]
     small = cv2.resize(array, (max(1, width // 4), max(1, height // 4)))
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-    return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    return FrameStats(float(cv2.Laplacian(gray, cv2.CV_64F).var()), float(gray.mean()))
 
 
 def run_batch(
@@ -139,7 +152,8 @@ def run_batch(
 
     Inference runs in batches of config.batch_size. Unreadable images are
     skipped with a warning and recorded in results.json. Annotated copies are
-    written (to out_dir/annotated/) only for frames that have detections.
+    written to out_dir/annotated/ only for frames holding a detection at or
+    above config.threshold, and show every recorded box with its confidence.
     """
     images = discover_images(input_dir, exclude_dir=out_dir)
     if not images:
@@ -170,10 +184,17 @@ def run_batch(
                 for (path, array), detections in zip(loaded, batch_detections, strict=True):
                     relative = path.relative_to(input_dir)
                     height, width = array.shape[:2]
-                    if write_images and detections:
+                    above = any(d.confidence >= config.threshold for d in detections)
+                    if write_images and above:
                         _write_annotated(annotate(array, detections), annotated_dir / relative)
+                    stats = frame_stats(array)
                     per_path[path] = ImageResult(
-                        relative.as_posix(), width, height, blur_score(array), detections
+                        relative.as_posix(),
+                        width,
+                        height,
+                        stats.blur,
+                        stats.brightness,
+                        detections,
                     )
                     progress.update(1)
             results.extend(per_path[path] for path in chunk)
@@ -187,6 +208,7 @@ def run_batch(
         input_dir=input_dir,
         model_path=model_path if model_path is not None else config.model_path,
         conf=config.conf,
+        threshold=config.threshold,
         imgsz=config.imgsz,
     )
     processed = sum(1 for result in results if result.error is None)
@@ -196,6 +218,7 @@ def run_batch(
         processed=processed,
         skipped=len(results) - processed,
         seconds=seconds,
+        conf=config.conf,
     )
 
 
@@ -206,6 +229,7 @@ def write_results_json(
     input_dir: Path,
     model_path: Path,
     conf: float,
+    threshold: float,
     imgsz: int,
 ) -> None:
     """Full per-detection dump: boxes as [x1, y1, x2, y2] pixels plus confidence."""
@@ -213,6 +237,7 @@ def write_results_json(
         "input": str(input_dir),
         "model": str(model_path),
         "conf": conf,
+        "threshold": threshold,
         "imgsz": imgsz,
         "images": [_image_entry(result) for result in results],
     }
@@ -227,6 +252,7 @@ def _image_entry(result: ImageResult) -> dict[str, object]:
         "width": result.width,
         "height": result.height,
         "blur": round(result.blur, 1) if result.blur is not None else None,
+        "brightness": round(result.brightness, 1) if result.brightness is not None else None,
         "detections": [
             {"box": list(detection.int_box()), "confidence": round(detection.confidence, 3)}
             for detection in result.detections

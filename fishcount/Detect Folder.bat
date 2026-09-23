@@ -9,7 +9,7 @@ setlocal
 cd /d "%~dp0"
 > "%~dp0last-run.log" echo [%date% %time%] launched with: %*
 if "%~1"=="" (
-    echo Drag a folder of images onto this file to count the fish in it.
+    echo Drag a folder of images onto this file to detect fish in it.
 ) else (
     if exist "%~dp0.venv\Scripts\fishcount.exe" (
         "%~dp0.venv\Scripts\fishcount.exe" detect "%~1" --open

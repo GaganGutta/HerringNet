@@ -4,10 +4,15 @@
 # Path to the Community Fish Detector weights (never auto-downloaded).
 #model_path: models/cfd-yolov12x.pt
 
-# Confidence floor, 0 to 1. Everything above it is recorded and tiered;
-# nothing is silently dropped. Raise it only if the not_confident file
-# is too large to be useful.
+# Recording floor, 0 to 1. Every box above it is written to results.json and
+# detections.csv and is never dropped, so any threshold at or above this can be
+# evaluated later without re-running the detector.
 #conf: 0.10
+
+# Reporting threshold, 0 to 1. The one number that decides which frames count
+# as holding fish and which get an annotated image. Nothing else filters a
+# detection: no size rule, no blur rule, no cross-frame rule.
+#threshold: 0.25
 
 # NMS IoU threshold, 0 to 1 (how much boxes may overlap before being merged).
 #iou: 0.7

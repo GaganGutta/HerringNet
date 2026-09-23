@@ -15,28 +15,22 @@ from rich.table import Table
 from fishcount import __version__
 from fishcount import detector as detector_module
 from fishcount.batch import BatchSummary, NoImagesFoundError, run_batch
-from fishcount.classify import TIERS, ClassifySummary, classify
 from fishcount.config import ConfigError, load_config, merge_overrides
 from fishcount.detector import ModelNotFoundError
-
-_TIER_MEANING = {
-    "confident": "2+ real detections or one strong, sharp frame (or school exemption)",
-    "under_review": "one moderate detection, blur-capped evidence, or an oversized box",
-    "not_confident": "only weak, static, or weak-oversized detections",
-}
+from fishcount.report import ReportSummary, write_reports
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fishcount",
         description="Detect fish in a folder of images, fully local and offline. "
-        "Detection only: frames are tiered by confidence, nothing is counted.",
+        "Detection only: every box is recorded, nothing is counted.",
     )
     parser.add_argument("--version", action="version", version=f"fishcount {__version__}")
     subcommands = parser.add_subparsers(dest="command", required=True)
 
     detect = subcommands.add_parser(
-        "detect", help="One detection pass; tier every frame into three files."
+        "detect", help="One detection pass over a folder; write detections.csv and frames.csv."
     )
     detect.add_argument("folder", type=Path, help="Folder of images (subfolders included).")
     detect.add_argument(
@@ -51,7 +45,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--conf",
         type=float,
         default=None,
-        help="Confidence floor, 0-1 (default 0.10). Everything above it is recorded.",
+        help="Recording floor, 0-1 (default 0.10). Every box above it is written out.",
+    )
+    detect.add_argument(
+        "--threshold",
+        type=float,
+        default=None,
+        help="Reporting threshold, 0-1 (default 0.25): the one number deciding which "
+        "frames count as holding fish and get an annotated image.",
     )
     detect.add_argument(
         "--imgsz",
@@ -74,22 +75,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     detect.add_argument(
         "--batch-size", type=int, default=None, help="Images per model pass (default 8)."
-    )
-    detect.add_argument(
-        "--blur-percentile",
-        type=float,
-        default=25.0,
-        dest="blur_percentile",
-        help="Frames blurrier than this percentile of their own folder cannot reach "
-        "confident on thin evidence (default 25). 0 disables the blur cap.",
-    )
-    detect.add_argument(
-        "--static-min-frames",
-        type=int,
-        default=8,
-        dest="static_min_frames",
-        help="A box recurring at the same pixels in this many distinct frames is a "
-        "stationary object, demoted to not_confident (default 8). 0 disables.",
     )
     detect.add_argument(
         "--no-images",
@@ -126,6 +111,7 @@ def _detect_command(args: argparse.Namespace) -> int:
         config = merge_overrides(
             load_config(),
             conf=args.conf,
+            threshold=args.threshold,
             iou=args.iou,
             imgsz=args.imgsz,
             max_det=args.max_det,
@@ -161,54 +147,41 @@ def _detect_command(args: argparse.Namespace) -> int:
         errors.print(str(exc))
         return 1
 
-    tiers = classify(
-        out_dir,
-        floor=config.conf,
-        blur_percentile=args.blur_percentile,
-        static_min_frames=args.static_min_frames,
-        move_images=not args.no_images,
-    )
+    report = write_reports(out_dir, threshold=config.threshold)
 
-    _print_summary(console, batch, tiers)
+    _print_summary(console, batch, report)
     if args.open_folder:
         _open_folder(out_dir)
     return 0
 
 
-def _print_summary(console: Console, batch: BatchSummary, tiers: ClassifySummary) -> None:
+def _print_summary(console: Console, batch: BatchSummary, report: ReportSummary) -> None:
     table = Table(title="fishcount detection", show_header=True, title_justify="left")
-    table.add_column("Tier", style="dim")
+    table.add_column("", style="dim")
     table.add_column("Frames", justify="right")
     table.add_column("Detections", justify="right")
-    table.add_column("Meaning")
-    styles = {"confident": "bold green", "under_review": "bold yellow", "not_confident": ""}
-    for tier in TIERS:
-        table.add_row(
-            tier,
-            f"[{styles[tier]}]{tiers.frames_per_tier[tier]}[/]"
-            if styles[tier]
-            else str(tiers.frames_per_tier[tier]),
-            str(tiers.detections_per_tier[tier]),
-            _TIER_MEANING[tier],
-        )
-    table.add_row("(no detections)", str(tiers.no_detection_frames), "", "")
+    table.add_row(
+        f"at or above threshold {report.threshold:.2f}",
+        f"[bold green]{report.frames_above_threshold}[/]",
+        str(report.detections_above_threshold),
+    )
+    table.add_row(
+        f"recorded (floor {batch.conf:.2f})",
+        str(report.frames_with_detections),
+        str(report.detections),
+    )
+    table.add_row("scanned", str(report.frames), "")
     console.print(table)
+
     notes = [
         f"processed {batch.processed} frames in {batch.seconds:.0f} s "
-        f"({batch.seconds_per_image:.1f} s/frame)",
+        f"({batch.seconds_per_image:.1f} s/frame)"
     ]
-    if batch.skipped:
-        notes.append(f"skipped {batch.skipped} unreadable")
-    if tiers.blur_threshold is not None:
-        notes.append(
-            f"blur threshold {tiers.blur_threshold:.0f} "
-            f"(capped {tiers.blur_capped}, school-exempt {tiers.school_exempt})"
-        )
-    if tiers.static_detections:
-        notes.append(f"static detections demoted: {tiers.static_detections}")
+    if report.unreadable:
+        notes.append(f"skipped {report.unreadable} unreadable")
     console.print("[dim]" + "; ".join(notes) + "[/]")
-    for tier in TIERS:
-        console.print(f"[dim]{tier}:[/] {tiers.out_dir / (tier + '.csv')}")
+    for name in ("detections.csv", "frames.csv"):
+        console.print(f"[dim]{name}:[/] {report.out_dir / name}")
 
 
 def _open_folder(path: Path) -> None:
