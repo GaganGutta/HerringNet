@@ -347,6 +347,7 @@ def bootstrap(
     seed: int = 20260923,
     alpha: float = 0.05,
     population: Sequence[PopulationFrame] | None = None,
+    margins: MarginSet | None = None,
 ) -> Interval:
     """Stratified percentile bootstrap over frames.
 
@@ -378,7 +379,7 @@ def bootstrap(
             size = len(band_frames)
             resample.extend(band_frames[rng.randrange(size)] for _ in range(size))
         if population is not None:
-            resample = _reweighted(resample, population)
+            resample = _reweighted(resample, population, margins)
         value = statistic(resample)
         if value is not None:
             draws.append(value)
@@ -451,14 +452,20 @@ def difference(
     )
 
 
-def _reweighted(resample: Sequence[Frame], population: Sequence[PopulationFrame]) -> list[Frame]:
+def _reweighted(
+    resample: Sequence[Frame],
+    population: Sequence[PopulationFrame],
+    margins: MarginSet | None = None,
+) -> list[Frame]:
     """Copy a resample with freshly raked weights, leaving the originals alone.
 
     Copies rather than mutation because a resample holds the same Frame object
     several times; writing to frame.weight would have every copy overwrite the
     others and quietly corrupt the estimate.
     """
-    weights = calibrate_weights(resample, population, iterations=25, tolerance=1e-5)
+    weights = calibrate_weights(
+        resample, population, iterations=25, tolerance=1e-5, margins=margins
+    )
     return [replace(frame, weight=weight) for frame, weight in zip(resample, weights, strict=True)]
 
 
@@ -671,12 +678,41 @@ def _maybe(value: str) -> float | None:
 # condition cells, which flattens their true proportions. Whether a frame holds
 # a large box is included because the large-box quota over-sampled those frames
 # on purpose, and they are the denominator of the size-rule question.
-_MARGINS: tuple[Callable[[PopulationFrame | Frame], str], ...] = (
-    lambda f: f"{f.band}|{f.folder}",
-    lambda f: f"b:{f.brightness_bin}",
-    lambda f: f"z:{f.blur_bin}",
-    lambda f: f"L:{_is_large(f)}",  # the large-box question's own denominator
+MarginSet = tuple[Callable[["PopulationFrame | Frame"], str], ...]
+
+# Named margin sets, from most constrained to least. More margins remove more
+# bias but cost effective sample size, and on a small subset they can collapse
+# it: raking 40 constraints onto 147 frames drives some weights to zero and
+# leaves the estimate resting on one or two frames. `choose_margins` picks the
+# richest set the data can actually carry.
+MARGIN_SETS: tuple[tuple[str, MarginSet], ...] = (
+    (
+        "band x folder + brightness + blur + large",
+        (
+            lambda f: f"{f.band}|{f.folder}",
+            lambda f: f"b:{f.brightness_bin}",
+            lambda f: f"z:{f.blur_bin}",
+            lambda f: f"L:{_is_large(f)}",
+        ),
+    ),
+    (
+        "band x folder + brightness + blur",
+        (
+            lambda f: f"{f.band}|{f.folder}",
+            lambda f: f"b:{f.brightness_bin}",
+            lambda f: f"z:{f.blur_bin}",
+        ),
+    ),
+    (
+        "band x folder + large",
+        (lambda f: f"{f.band}|{f.folder}", lambda f: f"L:{_is_large(f)}"),
+    ),
+    ("band x folder", (lambda f: f"{f.band}|{f.folder}",)),
+    ("band + folder", (lambda f: f"band:{f.band}", lambda f: f"folder:{f.folder}")),
+    ("band", (lambda f: f"band:{f.band}",)),
 )
+
+_MARGINS: MarginSet = MARGIN_SETS[0][1]
 
 
 def calibrate_weights(
@@ -685,6 +721,7 @@ def calibrate_weights(
     *,
     iterations: int = 200,
     tolerance: float = 1e-9,
+    margins: MarginSet | None = None,
 ) -> list[float]:
     """Rake the sample weights until they reproduce known population totals.
 
@@ -706,8 +743,9 @@ def calibrate_weights(
     frame_id because a bootstrap resample contains the same frame several times
     and each copy is its own unit of weight; keying would silently merge them.
     """
+    margins = margins if margins is not None else _MARGINS
     targets: list[dict[str, float]] = []
-    for key in _MARGINS:
+    for key in margins:
         counts: dict[str, float] = defaultdict(float)
         for entry in population:
             counts[key(entry)] += 1.0
@@ -715,7 +753,7 @@ def calibrate_weights(
 
     # Precompute each frame's cell on every margin: the inner loop runs
     # thousands of times inside the bootstrap and string formatting dominates.
-    cells = [[key(frame) for frame in frames] for key in _MARGINS]
+    cells = [[key(frame) for frame in frames] for key in margins]
 
     nominal: dict[str, float] = defaultdict(float)
     for cell in cells[0]:
@@ -737,6 +775,38 @@ def calibrate_weights(
         if shift < tolerance:
             break
     return weights
+
+
+def choose_margins(
+    frames: Sequence[Frame],
+    population: Sequence[PopulationFrame],
+    *,
+    min_effective_fraction: float = 0.35,
+) -> tuple[str, MarginSet, float]:
+    """Pick the richest calibration the sample can carry without collapsing.
+
+    Each extra margin removes more of the sampler's design bias, but raking
+    too many constraints onto too few frames does real damage: weights spread
+    without limit, some frames fall to zero, and the estimate ends up resting
+    on a handful of observations while still reporting an interval. The guard
+    is the Kish effective sample size, which is exactly the quantity that
+    collapses when that happens. The first margin set keeping a reasonable
+    share of the frames' worth of information wins; if none does, the plainest
+    set is used, and the caller should say so rather than quote the number as
+    though it were solid.
+    """
+    best: tuple[str, MarginSet, float] | None = None
+    for name, margins in MARGIN_SETS:
+        weights = calibrate_weights(frames, population, margins=margins)
+        total = sum(weights)
+        squares = sum(w * w for w in weights)
+        effective = (total * total / squares) if squares > 0 else 0.0
+        if best is None or effective > best[2]:
+            best = (name, margins, effective)
+        if effective >= min_effective_fraction * len(frames):
+            return (name, margins, effective)
+    assert best is not None
+    return best
 
 
 def calibration_report(
@@ -783,6 +853,7 @@ def bootstrap_many(
     seed: int = 20260923,
     alpha: float = 0.05,
     population: Sequence[PopulationFrame] | None = None,
+    margins: MarginSet | None = None,
 ) -> dict[str, Interval]:
     """Intervals for many statistics from a single resampling pass.
 
@@ -804,7 +875,7 @@ def bootstrap_many(
             size = len(band_frames)
             resample.extend(band_frames[rng.randrange(size)] for _ in range(size))
         if population is not None:
-            resample = _reweighted(resample, population)
+            resample = _reweighted(resample, population, margins)
         for name, statistic in statistics.items():
             value = statistic(resample)
             if value is not None:
@@ -824,3 +895,41 @@ def bootstrap_many(
             len(frames),
         )
     return out
+
+
+def effective_sample_size(frames: Sequence[Frame]) -> float:
+    """Kish effective sample size: how many equally-weighted frames this is worth.
+
+    Unequal weights cost precision. 147 frames raked to a population can carry
+    the information of far fewer, and quoting the raw count would overstate
+    what the sample supports.
+    """
+    weights = [f.weight for f in frames]
+    total = sum(weights)
+    squares = sum(w * w for w in weights)
+    return (total * total / squares) if squares > 0 else 0.0
+
+
+def restrict(
+    frames: Sequence[Frame],
+    population: Sequence[PopulationFrame],
+    predicate: Callable[[Frame | PopulationFrame], bool],
+    *,
+    margins: MarginSet | None = None,
+) -> tuple[list[Frame], list[PopulationFrame]]:
+    """Narrow the evaluation to part of the run, re-raking weights to that part.
+
+    Filtering the labelled frames alone would leave them carrying weights built
+    to reproduce the whole run's totals, so they would still be standing in for
+    frames that are no longer in scope and every estimate would inherit the
+    excluded folders' shape. Both sides are filtered and the weights are
+    recomputed against the narrowed population, so the result describes the
+    subset and nothing else.
+    """
+    kept = [f for f in frames if predicate(f)]
+    sub_population = [p for p in population if predicate(p)]
+    if kept and sub_population:
+        weights = calibrate_weights(kept, sub_population, margins=margins)
+        for frame, weight in zip(kept, weights, strict=True):
+            frame.weight = weight
+    return kept, sub_population

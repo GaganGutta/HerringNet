@@ -317,3 +317,37 @@ def test_calibration_report_flags_a_margin_it_was_not_calibrated_on() -> None:
 
     assert rows["brightness=low"] == (75.0, 50)  # over-represented, and visibly so
     assert rows["brightness=high"] == (25.0, 50)
+
+
+def test_restrict_reweights_to_the_subset_rather_than_keeping_stale_weights() -> None:
+    """Dropping rows but keeping whole-run weights would describe the wrong run."""
+    from fishcount.evaluate import calibrate_weights, restrict
+
+    population = [_pop("mid", "keep") for _ in range(300)]
+    population += [_pop("mid", "drop") for _ in range(700)]
+    frames = []
+    for name in ("keep", "drop"):
+        for i in range(5):
+            f = _frame(f"{name}{i}", [], band="mid")
+            f.folder = name
+            frames.append(f)
+    for frame, weight in zip(frames, calibrate_weights(frames, population), strict=True):
+        frame.weight = weight
+    assert abs(sum(f.weight for f in frames) - 1000) < 1e-6
+
+    kept, sub = restrict(frames, population, lambda f: f.folder == "keep")
+
+    assert len(kept) == 5
+    assert len(sub) == 300
+    # totals now describe the subset: 300, not the 60 a stale weight would give
+    assert abs(sum(f.weight for f in kept) - 300) < 1e-6
+
+
+def test_effective_sample_size_falls_when_weights_are_uneven() -> None:
+    from fishcount.evaluate import effective_sample_size
+
+    even = [_frame(f"e{i}", [], weight=10.0) for i in range(10)]
+    uneven = [_frame("a", [], weight=91.0)] + [_frame(f"u{i}", [], weight=1.0) for i in range(9)]
+
+    assert abs(effective_sample_size(even) - 10.0) < 1e-9
+    assert effective_sample_size(uneven) < 2.0  # one frame carries almost everything
