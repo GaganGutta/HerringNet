@@ -181,6 +181,75 @@ fit is split in half and retried rather than killing the run.
 `--imgsz 1024` is about 2.5x faster again but misses dense schools of small
 fish entirely; use it only when that is acceptable.
 
+## Building ground truth
+
+Nothing in this tool filters detections any more, because nothing had ever been
+measured. These two commands produce the measurement.
+
+**Sample.** Draw a set of frames to label, spread deliberately rather than
+drawn at random:
+
+```
+fishcount sample ALLFISHDATA=output\ALLFISHDATA 120GOPRO=output\120GOPRO ^
+    --out labels --size 300 --include 120GOPRO/GOPR7891.JPG
+```
+
+The sample is stratified across camera, folder, brightness bin, blur bin and
+confidence band, and the bands are the point:
+
+| Band | Meaning | Why it is in the sample |
+| --- | --- | --- |
+| `none` | the detector found nothing at all | the only way to measure what it misses |
+| `low` | it fired, but only below 0.25 | the band where the threshold is decided |
+| `mid` | 0.25 to 0.50 | |
+| `high` | 0.50 and above | where precision is won or lost |
+
+Bands get a flat share of the sample rather than a proportional one: `none`
+frames dominate a real run and would otherwise crowd out everything else,
+while `high` frames are rare and decide precision. Frames holding a box over
+10% of the frame get their own quota, so the removed `oversized` rule can be
+judged on evidence. Sampling is seeded, and `sample_meta.json` records the
+seed, the bin cut points and the per-stratum counts.
+
+**Label.** Open the frames one at a time in a browser, entirely locally:
+
+```
+fishcount label labels --images "ALLFISHDATA=C:\Users\me\Desktop\ALLFISHDATA" ^
+    --images "120GOPRO=C:\Users\me\Desktop\120GOPRO"
+```
+
+| Key | Does |
+| --- | --- |
+| <kbd>F</kbd> / <kbd>X</kbd> | current box is a fish / is not a fish |
+| drag | draw a box around a fish the detector missed |
+| <kbd>Enter</kbd> | save the frame and go to the next |
+| <kbd>U</kbd> | undo the current box's verdict, or remove a drawn box |
+| <kbd>B</kbd> / <kbd>S</kbd> | previous frame / skip without saving |
+| <kbd>Z</kbd> | zoom to full resolution, for small fish |
+
+Both files are rewritten after every frame, so quitting at any point loses
+nothing and re-running the same command resumes at the first frame not yet
+done. Progress shows as `47/300`.
+
+```
+labels\
+  sample.csv          the frames to label, and the strata they came from
+  sample_meta.json    seed, bin cut points, per-stratum counts
+  labels.csv          one row per box: model boxes with a verdict, plus
+                      hand-drawn boxes around missed fish
+  labeled_frames.csv  one row per frame reviewed
+```
+
+`labeled_frames.csv` is not redundant. A frame with no rows in `labels.csv`
+could mean "reviewed, nothing here" or "not looked at yet", and those are
+opposite facts: the first is a true negative, the second is missing data.
+Recall computed without that distinction would be wrong.
+
+Every row in both files is keyed by `frame_id`: the source name plus the path
+relative to that source's folder. Never by filename. Across this project's
+14,382 frames there are only 9,999 distinct basenames, and 4,383 of them name
+two different photographs in two different folders.
+
 ## Known limitations
 
 - **The reporting threshold is not yet validated.** 0.25 is a placeholder
@@ -212,6 +281,25 @@ fish entirely; use it only when that is acceptable.
 | `--no-images` | off | CSVs only |
 | `--open` | off | open the output folder when finished |
 
+`fishcount sample NAME=OUT_DIR ...` draws the frames to label:
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--out DIR` | `labels` | where sample.csv goes |
+| `--size INT` | `300` | how many frames |
+| `--seed INT` | `20260922` | sampling seed, recorded in sample_meta.json |
+| `--large-box-quota INT` | `25` | minimum frames holding a box over 10% of the frame |
+| `--include FRAME_ID` | none | always include this frame; repeatable |
+
+`fishcount label SAMPLE_DIR` opens the labeling tool:
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--images NAME=FOLDER` | required | where each source's frames live; repeatable |
+| `--runs NAME=OUT_DIR` | `output\NAME` | where each source's detections.csv is |
+| `--port INT` | `8765` | local port |
+| `--no-browser` | off | do not open a browser automatically |
+
 `fishcount report OUT_DIR` re-derives the CSVs from a finished run:
 
 | Flag | Default | Meaning |
@@ -236,8 +324,9 @@ mypy fishcount
 Layout: `detector.py` (YOLO wrapper behind a small Detector protocol, device
 choice, out-of-memory backoff), `batch.py` (folder pipeline, per-frame
 statistics), `journal.py` (the resumable on-disk record), `report.py` (journal
-to CSVs and annotated images), `draw.py` (boxes), `config.py` (pydantic +
-config.yaml), `cli.py`.
+to CSVs and annotated images), `sample.py` (stratified sampling),
+`labeling.py` + `label_ui.html` (the local labeling tool), `draw.py` (boxes),
+`config.py` (pydantic + config.yaml), `cli.py`.
 
 ## License
 

@@ -37,6 +37,9 @@ fishcount = "fishcount.cli:main"
 [tool.setuptools]
 packages = ["fishcount"]
 
+[tool.setuptools.package-data]
+fishcount = ["label_ui.html"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
