@@ -60,6 +60,7 @@ FRAMES_HEADER = [
     "n_not_fish",
     "n_missed",
     "has_fish",  # the frame-level truth: any fish at all, model-found or not
+    "excluded",  # "yes": deliberately left out, e.g. a school too dense to box fully
 ]
 
 _MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
@@ -176,13 +177,35 @@ class LabelStore:
                     "source": row["source"],
                     "frame": row["frame"],
                     "boxes": boxes.get(row["frame_id"], []),
+                    # files written before this column existed have no exclusions
+                    "excluded": row.get("excluded") == "yes",
                 }
 
     def save_frame(
-        self, frame_id: str, source: str, frame: str, boxes: list[dict[str, Any]]
+        self,
+        frame_id: str,
+        source: str,
+        frame: str,
+        boxes: list[dict[str, Any]],
+        *,
+        excluded: bool = False,
     ) -> None:
+        """Record one frame. An excluded frame keeps no boxes.
+
+        Exclusion exists for frames that cannot be labelled completely, most
+        often a dense school. A half-boxed frame is worse than none: every fish
+        left unboxed is trained as background, which teaches the model to miss
+        exactly the fish it already struggles with. Excluding it records that
+        the frame was seen, so it does not come back, while making sure nothing
+        downstream reads it as either a positive or a negative.
+        """
         with self._lock:
-            self.frames[frame_id] = {"source": source, "frame": frame, "boxes": boxes}
+            self.frames[frame_id] = {
+                "source": source,
+                "frame": frame,
+                "boxes": [] if excluded else boxes,
+                "excluded": excluded,
+            }
             self._write()
 
     def _write(self) -> None:
@@ -209,6 +232,12 @@ class LabelStore:
         )
         rows = []
         for frame_id, record in sorted(self.frames.items()):
+            if record.get("excluded"):
+                # No verdict at all: blank rather than "no", which would be a claim.
+                rows.append(
+                    [frame_id, record["source"], record["frame"], "", "", "", "", "", "yes"]
+                )
+                continue
             boxes = record["boxes"]
             model = [b for b in boxes if b["origin"] == "model"]
             fish = [b for b in model if b["label"] == "fish"]
@@ -223,6 +252,7 @@ class LabelStore:
                     len(model) - len(fish),
                     len(missed),
                     "yes" if (fish or missed) else "no",
+                    "no",
                 ]
             )
         _atomic_csv(self.frames_path, FRAMES_HEADER, rows)
@@ -247,6 +277,7 @@ def _page() -> bytes:
 class _Handler(BaseHTTPRequestHandler):
     tasks: list[Task]
     store: LabelStore
+    training: bool = False
 
     def log_message(self, format: str, *args: Any) -> None:
         pass  # the console belongs to the progress line, not to request logs
@@ -269,13 +300,20 @@ class _Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         payload = json.loads(self.rfile.read(length))
         task = self.tasks[int(payload["index"])]
-        self.store.save_frame(task.frame_id, task.source, task.frame, payload["boxes"])
+        self.store.save_frame(
+            task.frame_id,
+            task.source,
+            task.frame,
+            payload["boxes"],
+            excluded=bool(payload.get("excluded", False)),
+        )
         done = len(self.store.frames)
         print(f"\r  labeled {done}/{len(self.tasks)} frames", end="", flush=True)
         self._send(200, "application/json", json.dumps({"done": done}).encode())
 
     def _task_payload(self) -> dict[str, Any]:
         return {
+            "training": self.training,
             "tasks": [
                 {
                     "index": index,
@@ -288,10 +326,11 @@ class _Handler(BaseHTTPRequestHandler):
                     "brightness": task.brightness,
                     "boxes": task.boxes,
                     "saved": self.store.frames.get(task.frame_id, {}).get("boxes"),
+                    "excluded": self.store.frames.get(task.frame_id, {}).get("excluded", False),
                     "done": task.frame_id in self.store.frames,
                 }
                 for index, task in enumerate(self.tasks)
-            ]
+            ],
         }
 
     def _send_image(self, index: int) -> None:
@@ -316,10 +355,20 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def serve(
-    tasks: list[Task], store: LabelStore, *, port: int = 8765, open_browser: bool = True
+    tasks: list[Task],
+    store: LabelStore,
+    *,
+    port: int = 8765,
+    open_browser: bool = True,
+    training: bool = False,
 ) -> None:
-    """Run the labeling server until Ctrl-C. Binds to localhost only."""
-    handler = type("Handler", (_Handler,), {"tasks": tasks, "store": store})
+    """Run the labeling server until Ctrl-C. Binds to localhost only.
+
+    `training` puts a standing reminder on every frame that the labels will be
+    used to train, where an unboxed fish is not a missed count but a lesson in
+    ignoring fish.
+    """
+    handler = type("Handler", (_Handler,), {"tasks": tasks, "store": store, "training": training})
     server = ThreadingHTTPServer(("127.0.0.1", port), handler)
     url = f"http://127.0.0.1:{port}/"
     print(f"Labeling {len(tasks)} frames; {len(store.frames)} already done.")

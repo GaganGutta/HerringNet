@@ -153,7 +153,13 @@ def load_dataset(
     so the difference can be shown.
     """
     sample = {r["frame_id"]: r for r in _rows(labels_dir / "sample.csv")}
-    reviewed = {r["frame_id"]: r for r in _rows(labels_dir / "labeled_frames.csv")}
+    # A frame left out on purpose has no verdict; counting it would turn "could
+    # not label" into a confident true negative.
+    reviewed = {
+        r["frame_id"]: r
+        for r in _rows(labels_dir / "labeled_frames.csv")
+        if r.get("excluded") != "yes"
+    }
     frame_area = frame_areas(runs)
 
     boxes: dict[str, list[Box]] = defaultdict(list)

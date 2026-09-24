@@ -226,3 +226,52 @@ def test_rows_are_sorted_by_frame_id_whatever_order_they_were_labeled(
 
     frames = _read(tmp_path / "labeled_frames.csv")
     assert [row["frame"] for row in frames] == ["a.jpg", "b.jpg", "c.jpg"]
+
+
+def test_a_frame_left_out_is_recorded_with_no_verdict_and_no_boxes(tmp_path: Path) -> None:
+    """Excluded is not "no fish": it must never read as a true negative."""
+    store = LabelStore(tmp_path)
+    half_boxed = [
+        {
+            "box_index": 0,
+            "origin": "model",
+            "label": "fish",
+            "x1": 1,
+            "y1": 2,
+            "x2": 3,
+            "y2": 4,
+            "confidence": 0.8,
+        }
+    ]
+
+    store.save_frame("RUN/school.jpg", "RUN", "school.jpg", half_boxed, excluded=True)
+
+    assert _read(tmp_path / "labels.csv") == []  # partial boxes are not kept
+    frame = _read(tmp_path / "labeled_frames.csv")[0]
+    assert frame["excluded"] == "yes"
+    assert frame["has_fish"] == ""  # blank, not "no"
+
+
+def test_an_excluded_frame_stays_done_across_sessions_and_can_be_included_later(
+    tmp_path: Path,
+) -> None:
+    first = LabelStore(tmp_path)
+    first.save_frame("RUN/school.jpg", "RUN", "school.jpg", [], excluded=True)
+
+    reopened = LabelStore(tmp_path)
+    assert reopened.frames["RUN/school.jpg"]["excluded"] is True  # does not come back
+
+    reopened.save_frame("RUN/school.jpg", "RUN", "school.jpg", [])
+    assert _read(tmp_path / "labeled_frames.csv")[0]["excluded"] == "no"
+
+
+def test_label_files_written_before_exclusion_existed_still_load(tmp_path: Path) -> None:
+    (tmp_path / "labeled_frames.csv").write_text(
+        "frame_id,source,frame,n_model_boxes,n_fish,n_not_fish,n_missed,has_fish\n"
+        "RUN/a.jpg,RUN,a.jpg,0,0,0,0,no\n",
+        encoding="utf-8",
+    )
+
+    store = LabelStore(tmp_path)
+
+    assert store.frames["RUN/a.jpg"]["excluded"] is False

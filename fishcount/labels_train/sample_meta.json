@@ -1,0 +1,50 @@
+{
+  "seed": 20260924,
+  "test_set": "splits\\test_primary.json",
+  "buffer_frames": 5,
+  "candidates": 7874,
+  "refused": {
+    "is a test frame": 147,
+    "is beside a test frame": 1131
+  },
+  "strata": {
+    "confident": {
+      "quota": 120,
+      "drawn": 120,
+      "eligible": 1046
+    },
+    "fish_folders": {
+      "quota": 120,
+      "drawn": 120,
+      "eligible": 839
+    },
+    "hard_negatives": {
+      "quota": 90,
+      "drawn": 90,
+      "eligible": 794
+    },
+    "faint": {
+      "quota": 70,
+      "drawn": 70,
+      "eligible": 1107
+    }
+  },
+  "per_folder": {
+    "100GOPRO": 23,
+    "101GOPRO": 84,
+    "102GOPRO": 53,
+    "103GOPRO": 54,
+    "104GOPROSOURCE": 84,
+    "105GOPRO": 54,
+    "106GOPRO": 24,
+    "107GOPRO": 24
+  },
+  "brightness_cuts": [
+    74.4,
+    103.9
+  ],
+  "blur_cuts": [
+    48.3,
+    63.1
+  ]
+}

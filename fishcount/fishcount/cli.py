@@ -210,6 +210,12 @@ def build_parser() -> argparse.ArgumentParser:
     label.add_argument(
         "--no-browser", action="store_true", help="Do not open a browser automatically."
     )
+    label.add_argument(
+        "--training",
+        action="store_true",
+        help="These labels will train a model: show a standing reminder to box every fish, "
+        "since an unboxed fish is learned as background.",
+    )
     return parser
 
 
@@ -331,7 +337,7 @@ def _label_command(args: argparse.Namespace) -> int:
         return 1
 
     store = LabelStore(sample_dir)
-    serve(tasks, store, port=args.port, open_browser=not args.no_browser)
+    serve(tasks, store, port=args.port, open_browser=not args.no_browser, training=args.training)
     console.print(f"[dim]labels.csv:[/] {sample_dir / 'labels.csv'}")
     return 0
 

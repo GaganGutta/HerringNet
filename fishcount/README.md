@@ -226,6 +226,7 @@ fishcount label labels --images "ALLFISHDATA=C:\Users\me\Desktop\ALLFISHDATA" ^
 | <kbd>U</kbd> | undo the current box's verdict, or remove a drawn box |
 | <kbd>B</kbd> / <kbd>S</kbd> | previous frame / skip without saving |
 | <kbd>Z</kbd> | zoom to full resolution, for small fish |
+| <kbd>E</kbd> | leave the frame out entirely: recorded, never comes back, never counted as "no fish" |
 
 Both files are rewritten after every frame, so quitting at any point loses
 nothing and re-running the same command resumes at the first frame not yet
@@ -249,6 +250,20 @@ Every row in both files is keyed by `frame_id`: the source name plus the path
 relative to that source's folder. Never by filename. Across this project's
 14,382 frames there are only 9,999 distinct basenames, and 4,383 of them name
 two different photographs in two different folders.
+
+### Labels for training are stricter
+
+When labels will train a model rather than measure one, every fish in a saved
+frame needs a box. In evaluation an unboxed fish is one missed count; in
+training it is a background example that teaches the model to ignore fish.
+Label with `--training` to keep that on screen, and press <kbd>E</kbd> on a
+frame too dense to box completely rather than saving it half-done.
+
+The held-out test set is frozen in `splits/test_primary.json` and enforced in
+code: `fishcount.training.load_training_frames`, the only way into training,
+raises if any frame is a test frame or within five frames (five minutes) of
+one, and final evaluation can claim the test set only once. The experiment
+itself is in `experiments/primary_finetune.py`.
 
 ## Known limitations
 
@@ -299,6 +314,7 @@ two different photographs in two different folders.
 | `--runs NAME=OUT_DIR` | `output\NAME` | where each source's detections.csv is |
 | `--port INT` | `8765` | local port |
 | `--no-browser` | off | do not open a browser automatically |
+| `--training` | off | the labels will train a model: show a standing reminder to box every fish |
 
 `fishcount report OUT_DIR` re-derives the CSVs from a finished run:
 

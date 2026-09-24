@@ -60,6 +60,9 @@
   #done { position: absolute; inset: 0; display: none; place-items: center; text-align: center;
     background: #0d0f11; }
   #done.show { display: grid; }
+  #banner { display: none; flex: none; padding: 6px 14px; font-size: 13px; font-weight: 600;
+    background: #3a2f0b; color: var(--pending); border-bottom: 1px solid var(--line); }
+  #banner.show { display: block; }
 </style>
 </head>
 <body>
@@ -69,6 +72,9 @@
     <div id="bar"><i></i></div>
     <span id="meta"></span>
   </header>
+  <div id="banner">Training labels: every fish in a saved frame needs a box. An unboxed fish
+    is learned as background and teaches the model to miss fish. If a frame is too dense to
+    box completely, press E to leave it out.</div>
   <div id="stage">
     <div id="wrap">
       <img id="frame" alt="">
@@ -87,13 +93,14 @@
       <kbd>F</kbd> fish &nbsp; <kbd>X</kbd> not fish &nbsp; <kbd>drag</kbd> box a missed fish &nbsp;
       <kbd>U</kbd> undo &nbsp; <kbd>Enter</kbd> save &amp; next &nbsp; <kbd>B</kbd> back &nbsp;
       <kbd>&larr;</kbd><kbd>&rarr;</kbd> pick box &nbsp; <kbd>Z</kbd> zoom &nbsp; <kbd>S</kbd> skip
+      &nbsp; <kbd>E</kbd> leave frame out
     </div>
   </footer>
 </div>
 
 <script>
 const $ = (id) => document.getElementById(id);
-let TASKS = [], idx = 0, boxes = [], cur = 0, natural = [0, 0], dirty = false;
+let TASKS = [], idx = 0, boxes = [], cur = 0, natural = [0, 0], dirty = false, TRAINING = false;
 
 const scale = () => {
   const img = $("frame");
@@ -103,6 +110,8 @@ const scale = () => {
 async function boot() {
   const data = await (await fetch("/api/tasks")).json();
   TASKS = data.tasks;
+  TRAINING = !!data.training;
+  $("banner").classList.toggle("show", TRAINING);
   const first = TASKS.findIndex((t) => !t.done);
   idx = first === -1 ? TASKS.length : first;
   if (idx >= TASKS.length) return finish();
@@ -126,7 +135,7 @@ function load(i) {
   const task = TASKS[i];
   dirty = false;
   // A frame already labeled comes back with the verdicts as they were saved.
-  boxes = task.saved
+  boxes = task.saved && !task.excluded
     ? task.saved.map((b) => ({ ...b }))
     : task.boxes.map((b, n) => ({
         box_index: n, origin: "model", label: "",
@@ -142,7 +151,14 @@ function load(i) {
     `<span class="tag">conf ${task.conf_band}</span>` +
     `<span class="tag">blur ${task.blur}</span><span class="tag">bright ${task.brightness}</span>`;
   const img = $("frame");
-  img.onload = () => { natural = [img.naturalWidth, img.naturalHeight]; draw(); };
+  img.onload = () => {
+    natural = [img.naturalWidth, img.naturalHeight];
+    draw();
+    if (task.excluded) {
+      $("status").className = "warn";
+      $("status").textContent = "You left this frame out earlier. Label it and press Enter to include it after all.";
+    }
+  };
   img.src = `/img/${i}`;
   $("stage").classList.remove("zoom");
 }
@@ -222,8 +238,23 @@ async function save(markDone = true) {
     body: JSON.stringify({ index: idx, boxes }),
   });
   task.done = markDone;
+  task.excluded = false;
   task.saved = boxes.map((b) => ({ ...b }));
   dirty = false;
+}
+
+async function leaveOut() {
+  const task = TASKS[idx];
+  await fetch("/api/label", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ index: idx, boxes: [], excluded: true }),
+  });
+  task.done = true;
+  task.excluded = true;
+  task.saved = [];
+  dirty = false;
+  load(idx + 1);
 }
 
 async function next() {
@@ -298,6 +329,7 @@ document.addEventListener("keydown", async (e) => {
   else if (k === "arrowleft") { cur = Math.max(cur - 1, 0); draw(); e.preventDefault(); }
   else if (k === "enter" || k === " ") { await next(); e.preventDefault(); }
   else if (k === "s") { load(idx + 1); e.preventDefault(); }   // skip without saving
+  else if (k === "e") { await leaveOut(); e.preventDefault(); }  // too dense to box fully
   else if (k === "b") { load(Math.max(0, idx - 1)); e.preventDefault(); }
   else if (k === "z") { toggleZoom(); e.preventDefault(); }
 });

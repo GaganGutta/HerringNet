@@ -245,7 +245,7 @@ def stratified_sample(
     for band, quota in quotas.items():
         available = [r for r in by_band.get(band, []) if r.frame_id not in chosen]
         already = sum(1 for r in chosen.values() if r.conf_band == band)
-        for record in _spread(available, quota - already, brightness_cuts, blur_cuts, rng):
+        for record in spread(available, quota - already, brightness_cuts, blur_cuts, rng):
             chosen[record.frame_id] = record
 
     _top_up_large_boxes(chosen, records, large_box_quota, quotas, brightness_cuts, blur_cuts, rng)
@@ -293,7 +293,7 @@ def _apportion(weights: dict[str, int], size: int, supply: dict[str, int]) -> di
     return capped
 
 
-def _spread(
+def spread(
     records: Sequence[FrameRecord],
     count: int,
     brightness_cuts: Sequence[float],
@@ -414,11 +414,28 @@ def _counts(values: Iterable[str]) -> dict[str, int]:
 
 def write_sample(result: SampleResult, path: Path) -> None:
     """Write sample.csv, one row per frame, keyed by frame_id."""
+    write_sample_rows(result.frames, path, result.brightness_cuts, result.blur_cuts)
+
+
+def write_sample_rows(
+    frames: Sequence[FrameRecord],
+    path: Path,
+    brightness_cuts: Sequence[float],
+    blur_cuts: Sequence[float],
+    *,
+    extra: dict[str, dict[str, str]] | None = None,
+) -> None:
+    """Write frames in the sample.csv format the labeling tool reads.
+
+    `extra` adds columns, as column name -> {frame_id: value}; the labeling
+    tool reads columns by name, so extra ones pass through it untouched.
+    """
+    extra = extra or {}
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(SAMPLE_HEADER)
-        for record in result.frames:
+        writer.writerow([*SAMPLE_HEADER, *extra])
+        for record in frames:
             writer.writerow(
                 [
                     record.frame_id,
@@ -428,13 +445,14 @@ def write_sample(result: SampleResult, path: Path) -> None:
                     record.folder,
                     "" if record.blur is None else f"{record.blur:.1f}",
                     "" if record.brightness is None else f"{record.brightness:.1f}",
-                    bin_of(record.blur, result.blur_cuts),
-                    bin_of(record.brightness, result.brightness_cuts),
+                    bin_of(record.blur, blur_cuts),
+                    bin_of(record.brightness, brightness_cuts),
                     f"{record.max_conf:.3f}",
                     record.conf_band,
                     record.n_boxes,
                     f"{record.max_area_frac:.6f}",
                     "yes" if record.large_box else "no",
+                    *(values.get(record.frame_id, "") for values in extra.values()),
                 ]
             )
 
