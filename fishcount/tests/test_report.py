@@ -183,3 +183,85 @@ def test_frames_are_sorted_even_when_the_journal_is_not(tmp_path: Path) -> None:
     write_reports(out, threshold=0.25)
 
     assert [row["frame"] for row in _read(out / "frames.csv")] == ["a.jpg", "b.jpg", "c.jpg"]
+
+
+def test_fish_or_not_is_a_two_column_verdict_on_every_frame(tmp_path: Path) -> None:
+    out = _journal(
+        tmp_path / "out",
+        [
+            _frame("hit.jpg", [{"box": [0, 0, 10, 10], "confidence": 0.40}]),
+            _frame("weak.jpg", [{"box": [0, 0, 10, 10], "confidence": 0.20}]),
+            _frame("empty.jpg", []),
+        ],
+    )
+
+    write_reports(out, threshold=0.35)
+
+    with (out / "fish_or_not.csv").open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.reader(handle))
+    assert rows[0] == ["file", "has_fish"]
+    assert rows[1:] == [["empty.jpg", "no"], ["hit.jpg", "yes"], ["weak.jpg", "no"]]
+
+
+def test_fish_or_not_uses_paths_not_bare_filenames(tmp_path: Path) -> None:
+    """The same basename names different photographs in different folders."""
+    out = _journal(
+        tmp_path / "out",
+        [
+            _frame("a/GOPR0001.JPG", [{"box": [0, 0, 10, 10], "confidence": 0.9}]),
+            _frame("b/GOPR0001.JPG", []),
+        ],
+    )
+
+    write_reports(out, threshold=0.35)
+
+    rows = _read(out / "fish_or_not.csv")
+    assert [r["file"] for r in rows] == ["a/GOPR0001.JPG", "b/GOPR0001.JPG"]
+    assert [r["has_fish"] for r in rows] == ["yes", "no"]
+
+
+def test_an_unreadable_frame_reads_as_no_but_stays_flagged_in_frames_csv(
+    tmp_path: Path,
+) -> None:
+    out = _journal(tmp_path / "out", [{"file": "bad.jpg", "error": "unreadable image"}])
+
+    write_reports(out, threshold=0.35)
+
+    assert _read(out / "fish_or_not.csv") == [{"file": "bad.jpg", "has_fish": "no"}]
+    assert _read(out / "frames.csv")[0]["error"] == "unreadable image"
+
+
+def test_only_reports_on_the_wanted_folder_and_leaves_the_run_alone(tmp_path: Path) -> None:
+    out = _journal(
+        tmp_path / "out",
+        [
+            _frame("Primary/DCIM/104/a.jpg", [{"box": [0, 0, 10, 10], "confidence": 0.9}]),
+            _frame("Primary/DCIM/105/b.jpg", [{"box": [0, 0, 10, 10], "confidence": 0.9}]),
+            _frame("Predator/DCIM/104/c.jpg", [{"box": [0, 0, 10, 10], "confidence": 0.9}]),
+        ],
+    )
+    write_reports(out, threshold=0.35)  # the whole run first
+    assert len(_read(out / "fish_or_not.csv")) == 3
+
+    dest = tmp_path / "just104"
+    summary = write_reports(out, threshold=0.35, only=["Primary/DCIM/104"], dest=dest)
+
+    assert [r["file"] for r in _read(dest / "fish_or_not.csv")] == ["Primary/DCIM/104/a.jpg"]
+    assert summary.frames == 1
+    assert summary.dest == dest
+    assert len(_read(out / "fish_or_not.csv")) == 3  # the run's own CSVs are untouched
+
+
+def test_only_matches_whole_path_segments_not_string_prefixes(tmp_path: Path) -> None:
+    """ "104GOPRO" must not swallow "104GOPROSOURCE"."""
+    out = _journal(
+        tmp_path / "out",
+        [_frame("DCIM/104GOPRO/a.jpg", []), _frame("DCIM/104GOPROSOURCE/b.jpg", [])],
+    )
+
+    summary = write_reports(out, threshold=0.35, only=["DCIM/104GOPRO"], dest=tmp_path / "picked")
+
+    assert summary.frames == 1
+    assert [r["file"] for r in _read(tmp_path / "picked" / "fish_or_not.csv")] == [
+        "DCIM/104GOPRO/a.jpg"
+    ]

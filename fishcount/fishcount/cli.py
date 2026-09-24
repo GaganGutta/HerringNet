@@ -134,6 +134,23 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Write the CSVs only; skip annotated images.",
     )
+    report.add_argument(
+        "--only",
+        action="append",
+        default=[],
+        metavar="PREFIX",
+        help="Report on just the frames under this path, relative to the run's input "
+        'folder, e.g. --only "Primary camera/DCIM/104GOPROSOURCE". Repeatable. '
+        "No inference: the frames were already detected.",
+    )
+    report.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="Where to write the CSVs (default: the run folder). Required with --only, "
+        "so a filtered report cannot overwrite the whole run's.",
+    )
 
     sample = subcommands.add_parser(
         "sample",
@@ -402,6 +419,13 @@ def _report_command(args: argparse.Namespace) -> int:
         errors.print(str(exc))
         return 1
 
+    if args.only and args.out is None:
+        errors.print(
+            "--only needs --out: writing a filtered report into the run folder would "
+            "replace the whole run's CSVs with a subset of them."
+        )
+        return 1
+
     input_dir: Path | None = args.folder.expanduser().resolve() if args.folder else None
     if input_dir is None and not args.no_images:
         console.print(
@@ -414,7 +438,15 @@ def _report_command(args: argparse.Namespace) -> int:
         threshold=config.threshold,
         input_dir=input_dir,
         write_images=not args.no_images and input_dir is not None,
+        only=args.only or None,
+        dest=args.out.expanduser().resolve() if args.out else None,
     )
+    if args.only and report.frames == 0:
+        errors.print(
+            f"No frames under {', '.join(args.only)} in {out_dir / JOURNAL_FILENAME}. "
+            "Prefixes are relative to the folder that was detected."
+        )
+        return 1
 
     table = Table(title="fishcount report", show_header=True, title_justify="left")
     table.add_column("", style="dim")
@@ -430,8 +462,12 @@ def _report_command(args: argparse.Namespace) -> int:
     console.print(table)
     if report.annotated:
         console.print(f"[dim]{report.annotated} annotated images rewritten[/]")
-    for name in ("detections.csv", "frames.csv"):
-        console.print(f"[dim]{name}:[/] {out_dir / name}")
+    console.print(
+        f"[dim]fish_or_not.csv:[/] {report.frames_above_threshold} yes, "
+        f"{report.frames - report.frames_above_threshold} no"
+    )
+    for name in ("detections.csv", "frames.csv", "fish_or_not.csv"):
+        console.print(f"[dim]{name}:[/] {report.dest / name}")
     return 0
 
 
@@ -470,8 +506,8 @@ def _print_summary(console: Console, batch: BatchSummary, report: ReportSummary)
         notes.append(f"{report.annotated} annotated images written")
     if notes:
         console.print("[dim]" + "; ".join(notes) + "[/]")
-    for name in ("detections.csv", "frames.csv"):
-        console.print(f"[dim]{name}:[/] {report.out_dir / name}")
+    for name in ("detections.csv", "frames.csv", "fish_or_not.csv"):
+        console.print(f"[dim]{name}:[/] {report.dest / name}")
 
 
 def _open_folder(path: Path) -> None:

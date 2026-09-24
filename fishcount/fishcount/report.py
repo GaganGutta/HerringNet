@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import csv
 import shutil
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -40,12 +41,20 @@ FRAMES_HEADER = [
     "error",
 ]
 
+# The whole answer in two columns, for when the question is only "which frames
+# do I need to look at". The path is relative to the run's input folder and
+# never a bare filename: GoPro reuses basenames between cards, so across this
+# project's frames there are thousands of names that belong to two different
+# photographs.
+FISH_OR_NOT_HEADER = ["file", "has_fish"]
+
 
 @dataclass(slots=True)
 class ReportSummary:
     """What the run found, for the console summary."""
 
     out_dir: Path
+    dest: Path
     threshold: float
     frames: int
     frames_with_detections: int
@@ -62,21 +71,34 @@ def write_reports(
     threshold: float,
     input_dir: Path | None = None,
     write_images: bool = False,
+    only: Sequence[str] | None = None,
+    dest: Path | None = None,
 ) -> ReportSummary:
-    """Read the journal; write detections.csv and frames.csv.
+    """Read the journal; write detections.csv, frames.csv and fish_or_not.csv.
 
-    Both files are sorted by frame path. Every frame gets a row in frames.csv,
-    including frames with no detections and frames that could not be read, so
-    the frame list is a complete census of the input folder.
+    All three are sorted by frame path. Every frame gets a row in frames.csv
+    and in fish_or_not.csv, including frames with no detections and frames
+    that could not be read, so the list is a complete census of what was
+    scanned. An unreadable frame reads as `no`, since nothing was found in it;
+    frames.csv is where the distinction between "nothing there" and "could not
+    look" is kept.
+
+    `only` keeps just the frames whose path starts with one of the given
+    prefixes, which is how one folder is reported on without re-running the
+    detector over it. `dest` sends the CSVs somewhere other than the run
+    folder, so a filtered report cannot overwrite the whole run's.
 
     With `write_images` and `input_dir`, frames at or above the threshold are
-    re-read and written to out_dir/annotated/ with every recorded box drawn on
+    re-read and written to dest/annotated/ with every recorded box drawn on
     them. The folder is rebuilt from scratch so it always matches the threshold
     that produced it, never a leftover from an earlier one.
     """
     journal = out_dir / JOURNAL_FILENAME
+    dest = dest if dest is not None else out_dir
+    dest.mkdir(parents=True, exist_ok=True)
     summary = ReportSummary(
         out_dir=out_dir,
+        dest=dest,
         threshold=threshold,
         frames=0,
         frames_with_detections=0,
@@ -86,25 +108,31 @@ def write_reports(
         unreadable=0,
     )
 
-    annotated_dir = out_dir / "annotated"
+    annotated_dir = dest / "annotated"
     annotating = write_images and input_dir is not None
     if annotating:
         shutil.rmtree(annotated_dir, ignore_errors=True)
 
     with (
-        (out_dir / "detections.csv").open("w", encoding="utf-8", newline="") as detections_file,
-        (out_dir / "frames.csv").open("w", encoding="utf-8", newline="") as frames_file,
+        (dest / "detections.csv").open("w", encoding="utf-8", newline="") as detections_file,
+        (dest / "frames.csv").open("w", encoding="utf-8", newline="") as frames_file,
+        (dest / "fish_or_not.csv").open("w", encoding="utf-8", newline="") as verdict_file,
     ):
         detections_writer = csv.writer(detections_file)
         detections_writer.writerow(DETECTIONS_HEADER)
         frames_writer = csv.writer(frames_file)
         frames_writer.writerow(FRAMES_HEADER)
+        verdict_writer = csv.writer(verdict_file)
+        verdict_writer.writerow(FISH_OR_NOT_HEADER)
 
         for image in stream_sorted(journal):
+            if only is not None and not _matches(str(image["file"]), only):
+                continue
             summary.frames += 1
             if image.get("error") is not None:
                 summary.unreadable += 1
                 frames_writer.writerow([image["file"], "", "", "", "", image["error"]])
+                verdict_writer.writerow([image["file"], "no"])
                 continue
             detections = image.get("detections", [])
             area = float(image["width"]) * float(image["height"])
@@ -114,6 +142,7 @@ def write_reports(
             for det, conf in zip(detections, confidences, strict=True):
                 detections_writer.writerow(_detection_row(image["file"], det, conf, area))
             frames_writer.writerow(_frame_row(image, confidences, above))
+            verdict_writer.writerow([image["file"], "yes" if above else "no"])
 
             summary.detections += len(detections)
             summary.detections_above_threshold += above
@@ -126,6 +155,11 @@ def write_reports(
                 )
 
     return summary
+
+
+def _matches(file: str, prefixes: Sequence[str]) -> bool:
+    """Whether a frame's path sits under one of the wanted folders."""
+    return any(file == prefix or file.startswith(prefix.rstrip("/") + "/") for prefix in prefixes)
 
 
 def _annotate_frame(source: Path, dest: Path, detections: list[dict[str, Any]]) -> int:

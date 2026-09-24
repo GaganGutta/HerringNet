@@ -306,6 +306,8 @@ two different photographs in two different folders.
 | --- | --- | --- |
 | `--threshold FLOAT` | `0.25` | the threshold to report at |
 | `--folder DIR` | none | the original image folder, needed only to redraw annotated images |
+| `--only PREFIX` | none | report on just the frames under this path; repeatable; needs `--out` |
+| `--out DIR` | the run folder | where to write the CSVs |
 | `--no-images` | off | CSVs only |
 
 Defaults can also be set in [config.yaml](config.yaml). Precedence:
